@@ -134,7 +134,12 @@
     }
 
     window.Renderer.init(game.self.id);
-    window.Renderer.renderAll({ maze: data.maze, players: data.players });
+    window.Renderer.renderAll({
+      maze: data.maze,
+      players: data.players,
+      wallHp: data.wallHp,
+      roundId: data.roundId,
+    });
 
     // Apply any pre-existing fire state (e.g. mid-lockout/depleted reconnect).
     fire.depleted = false;
@@ -262,7 +267,12 @@
     fire.depleted = false;
     applyFireUi();
 
-    window.Renderer.renderAll({ maze: data.maze, players: data.players });
+    window.Renderer.renderAll({
+      maze: data.maze,
+      players: data.players,
+      wallHp: data.wallHp,
+      roundId: data.roundId,
+    });
     hideBanner();
     setStatus('Playing');
     updateHud();
