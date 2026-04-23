@@ -220,6 +220,7 @@
       BAD_REQUEST: 'Invalid code. Use 2 letters and 4 digits (e.g. FL1234).',
       ALREADY_IN_SESSION: 'Already in a session. Refresh the page to start over.',
       NOT_IN_SESSION: 'Not in a room yet.',
+      ROOM_FULL: 'That room already has 13 players.',
     };
     setSessionErrorMsg(map[reason] || `Could not join (${reason || 'error'}).`);
     showSessionModal();

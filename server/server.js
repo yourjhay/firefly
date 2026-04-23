@@ -5,6 +5,7 @@ const path = require('path');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { SessionManager } = require('./sessionManager');
+const { MAX_PLAYERS_PER_ROOM } = require('./gameManager');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const COLS = parseInt(process.env.MAZE_COLS || '16', 10);
@@ -114,8 +115,17 @@ wss.on('connection', (ws, req) => {
           send(ws, { type: 'sessionError', code: 'NOT_FOUND' });
           return;
         }
+        if (game.players.size >= MAX_PLAYERS_PER_ROOM) {
+          send(ws, { type: 'sessionError', code: 'ROOM_FULL' });
+          return;
+        }
         attachSession(ws, normalized, playerId, game);
         const player = game.addPlayer(playerId);
+        if (!player) {
+          detachSession(ws);
+          send(ws, { type: 'sessionError', code: 'ROOM_FULL' });
+          return;
+        }
         console.log(
           `[+] ${player.name} joined ${normalized} (${game.players.size} in room)`
         );
