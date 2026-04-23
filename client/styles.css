@@ -186,6 +186,30 @@ body {
   background: rgba(248, 113, 113, 0.3);
 }
 
+.btn.fire.overheated {
+  color: #64748b;
+  background: rgba(100, 116, 139, 0.15);
+  border-color: rgba(100, 116, 139, 0.4);
+  opacity: 0.65;
+}
+
+#firePill {
+  font-variant-numeric: tabular-nums;
+  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+
+#firePill.ready {
+  color: #86efac;
+  border-color: rgba(134, 239, 172, 0.35);
+  background: rgba(134, 239, 172, 0.08);
+}
+
+#firePill.overheated {
+  color: #fca5a5;
+  border-color: rgba(252, 165, 165, 0.45);
+  background: rgba(248, 113, 113, 0.12);
+}
+
 /* Show virtual dpad on touch devices (and small screens as a fallback). */
 @media (hover: none) and (pointer: coarse) {
   #touchControls {

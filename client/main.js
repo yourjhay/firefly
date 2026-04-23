@@ -7,7 +7,52 @@
     playerCount: document.getElementById('playerCount'),
     banner: document.getElementById('banner'),
     serverBtn: document.getElementById('serverBtn'),
+    firePill: document.getElementById('firePill'),
   };
+
+  // Fire/overheat state (for HUD + fire button styling).
+  const fire = {
+    overheated: false,
+    overheatedUntil: 0,
+    serverOffsetMs: 0, // serverTime - clientTime; used to normalize timers
+    lockoutMs: 10000,
+  };
+  let firePillTimer = null;
+  const fireBtn = document.querySelector('[data-action="fire"]');
+
+  function updateFirePill() {
+    if (!ui.firePill) return;
+    if (fire.overheated) {
+      const now = Date.now() + fire.serverOffsetMs;
+      const remaining = Math.max(0, fire.overheatedUntil - now);
+      if (remaining <= 0) {
+        fire.overheated = false;
+        applyFireUi();
+        return;
+      }
+      const secs = (remaining / 1000).toFixed(1);
+      ui.firePill.textContent = `● Cooling ${secs}s`;
+    }
+  }
+
+  function applyFireUi() {
+    if (ui.firePill) {
+      ui.firePill.classList.toggle('overheated', fire.overheated);
+      ui.firePill.classList.toggle('ready', !fire.overheated);
+      ui.firePill.textContent = fire.overheated ? '● Cooling…' : '● Ready';
+    }
+    if (fireBtn) {
+      fireBtn.classList.toggle('overheated', fire.overheated);
+    }
+    if (firePillTimer) {
+      clearInterval(firePillTimer);
+      firePillTimer = null;
+    }
+    if (fire.overheated) {
+      firePillTimer = setInterval(updateFirePill, 100);
+      updateFirePill();
+    }
+  }
 
   const game = {
     self: null,
@@ -70,8 +115,25 @@
     game.state = data.state;
     game.players = new Map(data.players.map((p) => [p.id, p]));
 
+    if (data.fire) {
+      fire.serverOffsetMs = (data.fire.serverTime || 0) - Date.now();
+      fire.lockoutMs = data.fire.lockoutMs || fire.lockoutMs;
+    }
+
     window.Renderer.init(game.self.id);
     window.Renderer.renderAll({ maze: data.maze, players: data.players });
+
+    // Apply any pre-existing overheat state (e.g. mid-lockout reconnect).
+    data.players.forEach((p) => {
+      if (p.overheated) {
+        window.Renderer.setPlayerOverheated(p.id, true);
+        if (p.id === game.self.id) {
+          fire.overheated = true;
+          fire.overheatedUntil = p.overheatedUntil || 0;
+        }
+      }
+    });
+    applyFireUi();
 
     setStatus(data.state === 'finished' ? 'Round over' : 'Playing');
     updateHud();
@@ -93,6 +155,7 @@
     if (!player) return;
     game.players.set(player.id, player);
     window.Renderer.addPlayer(player);
+    if (player.overheated) window.Renderer.setPlayerOverheated(player.id, true);
     updateHud();
   });
 
@@ -122,6 +185,21 @@
     window.Renderer.spawnBullet(evt);
   });
 
+  window.Net.on('fireState', (evt) => {
+    if (!evt) return;
+    if (typeof evt.serverTime === 'number') {
+      fire.serverOffsetMs = evt.serverTime - Date.now();
+    }
+    if (typeof evt.lockoutMs === 'number') fire.lockoutMs = evt.lockoutMs;
+    const isSelf = game.self && evt.id === game.self.id;
+    window.Renderer.setPlayerOverheated(evt.id, !!evt.overheated);
+    if (isSelf) {
+      fire.overheated = !!evt.overheated;
+      fire.overheatedUntil = evt.overheatedUntil || 0;
+      applyFireUi();
+    }
+  });
+
   window.Net.on('gameOver', ({ winner, resetInMs }) => {
     game.state = 'finished';
     const isYou = winner && game.self && winner.id === game.self.id;
@@ -140,6 +218,13 @@
     game.state = data.state;
     game.roundId = data.roundId;
     game.players = new Map(data.players.map((p) => [p.id, p]));
+    if (data.fire) {
+      fire.serverOffsetMs = (data.fire.serverTime || 0) - Date.now();
+      fire.lockoutMs = data.fire.lockoutMs || fire.lockoutMs;
+    }
+    fire.overheated = false;
+    fire.overheatedUntil = 0;
+    applyFireUi();
 
     window.Renderer.renderAll({ maze: data.maze, players: data.players });
     hideBanner();

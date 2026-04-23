@@ -13,7 +13,7 @@
     playerBarrels: new Map(), // playerId -> barrel entity
     wallEntities: new Map(),  // "x,y" -> wall entity
     fogTiles: new Map(),      // "x,y" -> fog entity
-    revealed: new Set(),      // "x,y" keys of tiles the self-player has uncovered
+    visible: new Set(),       // "x,y" keys currently lit (fog hidden). Recomputed on every move.
     currentMaze: null,        // reference to the latest maze grid (for LOS reveal)
     selfId: null,
     tileSize: TILE,
@@ -26,6 +26,7 @@
   // Tuned to land initial visibility near 5% of the maze (see simulation).
   const FOG_VISION_RADIUS = 5; // LOS raycast reach (blocked by walls)
   const FOG_GLOW_RADIUS = 3;   // small halo that always reveals (ignores walls)
+  const FOG_FEATHER = 1.75;    // width (in tiles) of the soft gradient at each radius edge
 
   function init(selfId) {
     state.selfId = selfId;
@@ -136,10 +137,10 @@
     if (!k) return;
     const T = state.tileSize;
 
-    // Clear any previous fog/reveal state.
+    // Clear any previous fog state.
     k.get('fog').forEach((e) => e.destroy());
     state.fogTiles.clear();
-    state.revealed.clear();
+    state.visible.clear();
     state.currentMaze = maze;
 
     for (let y = 0; y < maze.height; y++) {
@@ -148,6 +149,7 @@
           k.rect(T, T),
           k.pos(x * T, y * T),
           k.color(8, 9, 18),
+          k.opacity(1),
           k.z(25),
           'fog',
           { gx: x, gy: y },
@@ -157,40 +159,53 @@
     }
   }
 
-  function revealTile(x, y) {
-    const key = `${x},${y}`;
-    if (state.revealed.has(key)) return;
-    state.revealed.add(key);
-    const fog = state.fogTiles.get(key);
-    if (fog) {
-      fog.destroy();
-      state.fogTiles.delete(key);
-    }
-  }
-
-  // Reveal tiles visible from (cx, cy): a small unconditional glow halo plus a
-  // line-of-sight raycast that stops at walls. Revealed tiles persist.
-  function revealFrom(cx, cy) {
+  // Compute the per-tile fog opacity (0 = fully lit, 1 = fully fogged) from the
+  // player's current position. Tiles that aren't in the returned map should be
+  // treated as fully fogged. Combines a small unconditional halo with a
+  // line-of-sight raycast; both have a feathered edge so the visible area
+  // fades smoothly into darkness instead of popping at a hard circle.
+  function computeVisible(cx, cy) {
+    const visible = new Map();
     const maze = state.currentMaze;
-    if (!maze) return;
+    if (!maze) return visible;
     const grid = maze.grid;
     const W = maze.width;
     const H = maze.height;
 
-    // Small glow that reveals everything within Euclidean radius (ignores walls).
-    const gr = FOG_GLOW_RADIUS;
-    const ri = Math.ceil(gr);
-    for (let dy = -ri; dy <= ri; dy++) {
-      for (let dx = -ri; dx <= ri; dx++) {
-        if (Math.hypot(dx, dy) > gr) continue;
-        const x = cx + dx, y = cy + dy;
-        if (x < 0 || y < 0 || x >= W || y >= H) continue;
-        revealTile(x, y);
+    // Maps a distance `d` in tiles to a fog opacity. Between `hard` (fully
+    // lit) and `edge` (fully fogged) we linearly blend; inside `hard` it's
+    // clear, outside `edge` it's fully fogged.
+    function opacityAt(d, hard, edge) {
+      if (d <= hard) return 0;
+      if (d >= edge) return 1;
+      return (d - hard) / (edge - hard);
+    }
+
+    // Mark a tile with its fog opacity, keeping the brighter (lower-opacity)
+    // contribution when multiple passes overlap on the same tile.
+    function mark(x, y, op) {
+      if (x < 0 || y < 0 || x >= W || y >= H) return;
+      if (op >= 1) return;
+      const key = `${x},${y}`;
+      const cur = visible.get(key);
+      if (cur === undefined || op < cur) visible.set(key, op);
+    }
+
+    // Halo (ignores walls) — feathered from FOG_GLOW_RADIUS outward.
+    const gHard = Math.max(0, FOG_GLOW_RADIUS - FOG_FEATHER);
+    const gEdge = FOG_GLOW_RADIUS + FOG_FEATHER;
+    const gri = Math.ceil(gEdge);
+    for (let dy = -gri; dy <= gri; dy++) {
+      for (let dx = -gri; dx <= gri; dx++) {
+        const d = Math.hypot(dx, dy);
+        if (d >= gEdge) continue;
+        mark(cx + dx, cy + dy, opacityAt(d, gHard, gEdge));
       }
     }
 
-    // LOS raycasting — 360 rays, wall-occluded, out to FOG_VISION_RADIUS.
-    const vr = FOG_VISION_RADIUS;
+    // LOS raycasting — 360 rays, wall-occluded, out to the feathered edge.
+    const vHard = Math.max(FOG_GLOW_RADIUS, FOG_VISION_RADIUS - FOG_FEATHER);
+    const vEdge = FOG_VISION_RADIUS + FOG_FEATHER;
     for (let i = 0; i < 360; i++) {
       const a = (i / 360) * Math.PI * 2;
       const ddx = Math.cos(a);
@@ -198,18 +213,44 @@
       let fx = cx + 0.5;
       let fy = cy + 0.5;
       let dist = 0;
-      while (dist < vr) {
+      while (dist < vEdge) {
         fx += ddx * 0.25;
         fy += ddy * 0.25;
         dist += 0.25;
         const tx = Math.floor(fx);
         const ty = Math.floor(fy);
         if (tx < 0 || ty < 0 || tx >= W || ty >= H) break;
-        if (Math.hypot(tx - cx, ty - cy) > vr) break;
-        revealTile(tx, ty);
+        const d = Math.hypot(tx - cx, ty - cy);
+        if (d >= vEdge) break;
+        mark(tx, ty, opacityAt(d, vHard, vEdge));
         if (grid[ty][tx] === 1) break;
       }
     }
+
+    return visible;
+  }
+
+  // Light the tiles visible from (cx, cy) and re-fog everything else. Unlike
+  // the old "persistent reveal" behavior, previously-seen-but-now-outside
+  // tiles go dark again — the player only sees a traveling, feathered halo.
+  function revealFrom(cx, cy) {
+    const next = computeVisible(cx, cy);
+
+    // Re-fog tiles that were lit last frame but aren't anymore.
+    state.visible.forEach((_, key) => {
+      if (!next.has(key)) {
+        const fog = state.fogTiles.get(key);
+        if (fog) fog.opacity = 1;
+      }
+    });
+
+    // Apply new opacities for currently-lit tiles (includes feather band).
+    next.forEach((op, key) => {
+      const fog = state.fogTiles.get(key);
+      if (fog) fog.opacity = op;
+    });
+
+    state.visible = next;
   }
 
   function hexToRgb(hex) {
@@ -420,6 +461,19 @@
     ent.facing = facing;
   }
 
+  function setPlayerOverheated(id, overheated) {
+    const barrel = state.playerBarrels.get(id);
+    if (barrel) {
+      if (overheated) {
+        barrel.color = state.k.rgb(100, 116, 139);
+        barrel.opacity = 0.55;
+      } else {
+        barrel.color = state.k.rgb(255, 255, 255);
+        barrel.opacity = 0.85;
+      }
+    }
+  }
+
   // Animate a bullet from `from` tile to `to` tile. If `destroyed` is true,
   // the wall at `to` is removed on bullet arrival.
   function spawnBullet({ shooterId, color, from, to, destroyed }) {
@@ -570,6 +624,7 @@
     removePlayer,
     updatePlayerPosition,
     setPlayerFacing,
+    setPlayerOverheated,
     spawnBullet,
     revealFrom,
   };

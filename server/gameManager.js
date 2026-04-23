@@ -99,6 +99,10 @@ class GameManager {
       facing: 'right',
       lastMoveAt: 0,
       lastFireAt: 0,
+      burstUsedMs: 0,
+      overheated: false,
+      overheatedUntil: 0,
+      _overheatTimer: null,
     };
     this.players.set(id, player);
     this.broadcast(
@@ -137,6 +141,11 @@ class GameManager {
       state: this.state,
       winnerId: this.winnerId,
       roundId: this.roundId,
+      fire: {
+        burstCapacityMs: BURST_CAPACITY_MS,
+        lockoutMs: OVERHEAT_LOCKOUT_MS,
+        serverTime: Date.now(),
+      },
     };
   }
 
@@ -187,8 +196,46 @@ class GameManager {
     const p = this.players.get(id);
     if (!p) return;
     const now = Date.now();
-    if (now - (p.lastFireAt || 0) < FIRE_COOLDOWN_MS) return;
+
+    // Overheated? If lockout already elapsed, recover; otherwise deny.
+    if (p.overheated) {
+      if (now >= p.overheatedUntil) {
+        this._endOverheat(p);
+      } else {
+        return;
+      }
+    }
+
+    // Regenerate burst budget only for idle time beyond the shot cooldown,
+    // so rapid-fire bursts don't silently refill mid-burst. Breaks longer
+    // than FIRE_COOLDOWN_MS contribute toward recovery at 0.2 ms/ms.
+    const sinceLastShot = Math.max(0, now - (p.lastFireAt || 0));
+    const idleMs = Math.max(0, sinceLastShot - FIRE_COOLDOWN_MS);
+    if (idleMs > 0) {
+      p.burstUsedMs = Math.max(0, p.burstUsedMs - idleMs * BURST_RECOVERY_RATE);
+    }
+
+    // Short cooldown between individual shots.
+    if (now - p.lastFireAt < FIRE_COOLDOWN_MS) return;
+
+    // Not enough budget left for another shot — trip the overheat instead.
+    if (p.burstUsedMs + FIRE_COOLDOWN_MS > BURST_CAPACITY_MS) {
+      p.burstUsedMs = BURST_CAPACITY_MS;
+      p.overheated = true;
+      p.overheatedUntil = now + OVERHEAT_LOCKOUT_MS;
+      if (p._overheatTimer) clearTimeout(p._overheatTimer);
+      p._overheatTimer = setTimeout(() => {
+        if (!this.players.has(p.id)) return;
+        this._endOverheat(p);
+        this.broadcast(this._fireStateMessage(p));
+      }, OVERHEAT_LOCKOUT_MS);
+      this.broadcast(this._fireStateMessage(p));
+      return;
+    }
+
     p.lastFireAt = now;
+    p.burstUsedMs += FIRE_COOLDOWN_MS;
+    this.broadcast(this._fireStateMessage(p));
 
     const delta = DIR_DELTAS[p.facing || 'right'];
     const [dx, dy] = delta;
@@ -247,6 +294,29 @@ class GameManager {
     this.newMaze();
     this.broadcast({ type: 'newRound', ...this.snapshot() });
   }
+
+  _endOverheat(p) {
+    p.overheated = false;
+    p.overheatedUntil = 0;
+    p.burstUsedMs = 0;
+    if (p._overheatTimer) {
+      clearTimeout(p._overheatTimer);
+      p._overheatTimer = null;
+    }
+  }
+
+  _fireStateMessage(p) {
+    return {
+      type: 'fireState',
+      id: p.id,
+      overheated: p.overheated,
+      overheatedUntil: p.overheated ? p.overheatedUntil : 0,
+      burstUsedMs: p.burstUsedMs,
+      burstCapacityMs: BURST_CAPACITY_MS,
+      lockoutMs: OVERHEAT_LOCKOUT_MS,
+      serverTime: Date.now(),
+    };
+  }
 }
 
 function serializePlayer(p) {
@@ -257,6 +327,8 @@ function serializePlayer(p) {
     x: p.x,
     y: p.y,
     facing: p.facing || 'right',
+    overheated: !!p.overheated,
+    overheatedUntil: p.overheated ? p.overheatedUntil : 0,
   };
 }
 
