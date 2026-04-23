@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <title>Maze Race</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header id="hud">
+      <div class="hud-left">
+        <span id="status" class="pill">Connecting…</span>
+        <span id="roundLabel" class="pill muted">Round —</span>
+      </div>
+      <div class="hud-right">
+        <span id="playerInfo" class="pill">You: —</span>
+        <span id="playerCount" class="pill muted">Players: 0</span>
+        <button id="serverBtn" class="pill pill-btn" title="Change server URL">
+          Server…
+        </button>
+      </div>
+    </header>
+
+    <main id="stage">
+      <div id="game"></div>
+      <div id="banner" class="hidden"></div>
+    </main>
+
+    <div id="touchControls" aria-hidden="true">
+      <div class="dpad">
+        <button class="btn up" data-dir="up" aria-label="Up">▲</button>
+        <div class="dpad-row">
+          <button class="btn left" data-dir="left" aria-label="Left">◀</button>
+          <button class="btn right" data-dir="right" aria-label="Right">▶</button>
+        </div>
+        <button class="btn down" data-dir="down" aria-label="Down">▼</button>
+      </div>
+      <button class="btn fire" data-action="fire" aria-label="Fire">●</button>
+    </div>
+
+    <script src="https://unpkg.com/kaboom@3000.1.17/dist/kaboom.js"></script>
+    <script src="network.js"></script>
+    <script src="renderer.js"></script>
+    <script src="controls.js"></script>
+    <script src="main.js"></script>
+  </body>
+</html>
