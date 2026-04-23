@@ -1,0 +1,12 @@
+services:
+  maze-race:
+    build: .
+    image: maze-race:latest
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-3000}:3000"
+    environment:
+      PORT: "3000"
+      MAZE_COLS: "${MAZE_COLS:-16}"
+      MAZE_ROWS: "${MAZE_ROWS:-16}"
+      WS_PATH: "${WS_PATH:-/ws}"
