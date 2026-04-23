@@ -1,13 +1,14 @@
 const crypto = require('crypto');
 const http = require('http');
+const net = require('net');
 const path = require('path');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { SessionManager } = require('./sessionManager');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
-const COLS = parseInt(process.env.MAZE_COLS || '10', 10);
-const ROWS = parseInt(process.env.MAZE_ROWS || '10', 10);
+const COLS = parseInt(process.env.MAZE_COLS || '16', 10);
+const ROWS = parseInt(process.env.MAZE_ROWS || '16', 10);
 const WS_PATH = process.env.WS_PATH || '/ws';
 
 const app = express();
@@ -173,7 +174,89 @@ const heartbeat = setInterval(() => {
 
 wss.on('close', () => clearInterval(heartbeat));
 
-server.listen(PORT, () => {
-  console.log(`Maze race server listening at http://localhost:${PORT}`);
-  console.log(`WebSocket endpoint: ws://localhost:${PORT}${WS_PATH}`);
+/**
+ * Picks a free TCP port starting at `startPort` (e.g. 3000) so the server
+ * does not fail with EADDRINUSE when a previous `npm start` is still running.
+ * Uses a throwaway listener + close; a tiny TOCTTOU window remains, but
+ * the common “port busy” case is fixed.
+ */
+function findListenPort(startPort, maxHops = 32) {
+  return new Promise((resolve, reject) => {
+    const tryPort = (p, hops) => {
+      if (hops > maxHops) {
+        reject(
+          new Error(
+            `No free port found from ${startPort} through ${startPort + maxHops}.`
+          )
+        );
+        return;
+      }
+      const probe = net.createServer();
+      const onError = (e) => {
+        probe.removeAllListeners();
+        if (e.code === 'EADDRINUSE') {
+          tryPort(p + 1, hops + 1);
+        } else {
+          reject(e);
+        }
+      };
+      probe.once('error', onError);
+      probe.listen(p, () => {
+        probe.removeListener('error', onError);
+        probe.close((err) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve(p);
+        });
+      });
+    };
+    tryPort(startPort, 0);
+  });
+}
+
+wss.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    // Avoid “Unhandled 'error' event” on the WebSocket server (shared socket).
+    return;
+  }
+  console.error('[ws] server error', err);
 });
+
+findListenPort(PORT)
+  .then(
+    (chosenPort) =>
+      new Promise((resolve, reject) => {
+        const fail = (err) => {
+          server.removeListener('error', fail);
+          reject(err);
+        };
+        server.once('error', fail);
+        server.listen(chosenPort, () => {
+          server.removeListener('error', fail);
+          if (chosenPort !== PORT) {
+            console.warn(
+              `Port ${PORT} is in use; listening on ${chosenPort} instead.`
+            );
+          }
+          console.log(
+            `Maze race server listening at http://localhost:${chosenPort}`
+          );
+          console.log(
+            `WebSocket endpoint: ws://localhost:${chosenPort}${WS_PATH}`
+          );
+          resolve();
+        });
+      })
+  )
+  .catch((err) => {
+    if (err && err.code === 'EADDRINUSE') {
+      console.error(
+        `Could not bind: port in use. Set PORT to a free value, e.g. PORT=3001`
+      );
+    } else {
+      console.error(err && err.message ? err.message : err);
+    }
+    process.exit(1);
+  });

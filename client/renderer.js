@@ -3,6 +3,10 @@
 // bullets + wall destruction as broadcast by the server.
 (function () {
   const TILE = 32; // logical tile size (the canvas is CSS-scaled to fit)
+  // Fixed viewport: world can be larger; camera follows the local player.
+  const VIEW_W = 512;
+  const VIEW_H = 512;
+  const CAM_FOLLOW_SMOOTH = 0.18;
   const lerp = (a, b, t) => a + (b - a) * t;
 
   // Match server/gameManager.js (for crack threshold after 3 hits).
@@ -106,11 +110,35 @@
     state.mazeHeight = 0;
   }
 
+  function syncCameraFollow(snap) {
+    const k = state.k;
+    if (!k || !state.selfId) return;
+    const ent = state.playerEntities.get(state.selfId);
+    if (!ent) return;
+
+    const viewW = k.width();
+    const viewH = k.height();
+    const W = state.mazeWidth * state.tileSize;
+    const H = state.mazeHeight * state.tileSize;
+    const halfW = viewW / 2;
+    const halfH = viewH / 2;
+    let tx = ent.pos.x;
+    let ty = ent.pos.y;
+    if (W <= viewW) tx = W / 2;
+    else tx = Math.max(halfW, Math.min(W - halfW, tx));
+    if (H <= viewH) ty = H / 2;
+    else ty = Math.max(halfH, Math.min(H - halfH, ty));
+    const target = k.vec2(tx, ty);
+    if (snap) {
+      k.camPos(target);
+    } else {
+      k.camPos(k.lerp(k.camPos(), target, CAM_FOLLOW_SMOOTH));
+    }
+  }
+
   function setupKaboomFor(maze) {
     state.mazeWidth = maze.width;
     state.mazeHeight = maze.height;
-    const w = maze.width * TILE;
-    const h = maze.height * TILE;
 
     const container = document.getElementById('game');
     // Remove any previously created Kaboom canvases (e.g. on re-init).
@@ -121,8 +149,8 @@
     // eslint-disable-next-line no-undef
     const k = kaboom({
       canvas,
-      width: w,
-      height: h,
+      width: VIEW_W,
+      height: VIEW_H,
       background: [15, 16, 30],
       crisp: true,
       global: false,
@@ -131,13 +159,15 @@
     state.k = k;
     state.tileSize = TILE;
 
-    // Lerp player entities toward their target positions each frame.
+    // Lerp player entities toward their target positions each frame; camera
+    // follows the self-player within world bounds.
     k.onUpdate(() => {
       state.playerEntities.forEach((ent) => {
         if (ent.targetX == null) return;
         ent.pos.x = lerp(ent.pos.x, ent.targetX, 0.3);
         ent.pos.y = lerp(ent.pos.y, ent.targetY, 0.3);
       });
+      syncCameraFollow(false);
     });
   }
 
@@ -529,6 +559,7 @@
     if (snap) {
       ent.pos.x = ent.targetX;
       ent.pos.y = ent.targetY;
+      if (id === state.selfId) syncCameraFollow(true);
     }
     // Extend fog reveal whenever the self-player moves.
     if (id === state.selfId) revealFrom(x, y);
@@ -708,6 +739,7 @@
     // Initial fog reveal around the self-player's spawn position.
     const me = data.players.find((p) => p.id === state.selfId);
     if (me) revealFrom(me.x, me.y);
+    syncCameraFollow(true);
   }
 
   window.Renderer = {

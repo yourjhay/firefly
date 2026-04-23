@@ -40,7 +40,7 @@ const DIR_DELTAS = {
 class GameManager {
   // broadcast(msg, exceptId?) is the transport hook. Caller fans the JSON
   // payload out to every connected client (optionally skipping one).
-  constructor({ broadcast, cols = 10, rows = 10 } = {}) {
+  constructor({ broadcast, cols = 16, rows = 16 } = {}) {
     this.broadcast = broadcast || (() => {});
     this.cols = cols;
     this.rows = rows;
