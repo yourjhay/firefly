@@ -16,12 +16,15 @@
     overheatedUntil: 0,
     serverOffsetMs: 0, // serverTime - clientTime; used to normalize timers
     lockoutMs: 10000,
+    burstCapacityMs: 2000, // opportunity remaining for the next burst
+    depleted: false,        // true: no firing possible for the rest of the round
   };
   let firePillTimer = null;
   const fireBtn = document.querySelector('[data-action="fire"]');
 
   function updateFirePill() {
     if (!ui.firePill) return;
+    if (fire.depleted) return; // static message, no countdown
     if (fire.overheated) {
       const now = Date.now() + fire.serverOffsetMs;
       const remaining = Math.max(0, fire.overheatedUntil - now);
@@ -31,24 +34,32 @@
         return;
       }
       const secs = (remaining / 1000).toFixed(1);
-      ui.firePill.textContent = `● Cooling ${secs}s`;
+      const opp = (fire.burstCapacityMs / 1000).toFixed(1);
+      ui.firePill.textContent = `● Cooling ${secs}s — next burst ${opp}s`;
     }
   }
 
   function applyFireUi() {
     if (ui.firePill) {
-      ui.firePill.classList.toggle('overheated', fire.overheated);
-      ui.firePill.classList.toggle('ready', !fire.overheated);
-      ui.firePill.textContent = fire.overheated ? '● Cooling…' : '● Ready';
+      ui.firePill.classList.toggle('overheated', fire.overheated && !fire.depleted);
+      ui.firePill.classList.toggle('ready', !fire.overheated && !fire.depleted);
+      ui.firePill.classList.toggle('depleted', fire.depleted);
+      if (fire.depleted) {
+        ui.firePill.textContent = '✕ No bullets left this round';
+      } else {
+        ui.firePill.textContent = fire.overheated ? '● Cooling…' : '● Ready';
+      }
     }
     if (fireBtn) {
-      fireBtn.classList.toggle('overheated', fire.overheated);
+      fireBtn.classList.toggle('overheated', fire.overheated && !fire.depleted);
+      fireBtn.classList.toggle('depleted', fire.depleted);
+      fireBtn.disabled = fire.depleted;
     }
     if (firePillTimer) {
       clearInterval(firePillTimer);
       firePillTimer = null;
     }
-    if (fire.overheated) {
+    if (fire.overheated && !fire.depleted) {
       firePillTimer = setInterval(updateFirePill, 100);
       updateFirePill();
     }
@@ -117,19 +128,29 @@
 
     if (data.fire) {
       fire.serverOffsetMs = (data.fire.serverTime || 0) - Date.now();
-      fire.lockoutMs = data.fire.lockoutMs || fire.lockoutMs;
+      fire.lockoutMs = data.fire.lockoutBaseMs || fire.lockoutMs;
+      fire.burstCapacityMs =
+        data.fire.burstCapacityBaseMs || fire.burstCapacityMs;
     }
 
     window.Renderer.init(game.self.id);
     window.Renderer.renderAll({ maze: data.maze, players: data.players });
 
-    // Apply any pre-existing overheat state (e.g. mid-lockout reconnect).
+    // Apply any pre-existing fire state (e.g. mid-lockout/depleted reconnect).
+    fire.depleted = false;
     data.players.forEach((p) => {
-      if (p.overheated) {
+      if (p.overheated || p.depleted) {
         window.Renderer.setPlayerOverheated(p.id, true);
-        if (p.id === game.self.id) {
-          fire.overheated = true;
-          fire.overheatedUntil = p.overheatedUntil || 0;
+      }
+      if (p.id === game.self.id) {
+        fire.overheated = !!p.overheated;
+        fire.overheatedUntil = p.overheatedUntil || 0;
+        fire.depleted = !!p.depleted;
+        if (typeof p.nextBurstCapacityMs === 'number') {
+          fire.burstCapacityMs = p.nextBurstCapacityMs;
+        }
+        if (typeof p.nextLockoutMs === 'number') {
+          fire.lockoutMs = p.nextLockoutMs;
         }
       }
     });
@@ -155,7 +176,9 @@
     if (!player) return;
     game.players.set(player.id, player);
     window.Renderer.addPlayer(player);
-    if (player.overheated) window.Renderer.setPlayerOverheated(player.id, true);
+    if (player.overheated || player.depleted) {
+      window.Renderer.setPlayerOverheated(player.id, true);
+    }
     updateHud();
   });
 
@@ -190,12 +213,22 @@
     if (typeof evt.serverTime === 'number') {
       fire.serverOffsetMs = evt.serverTime - Date.now();
     }
-    if (typeof evt.lockoutMs === 'number') fire.lockoutMs = evt.lockoutMs;
     const isSelf = game.self && evt.id === game.self.id;
-    window.Renderer.setPlayerOverheated(evt.id, !!evt.overheated);
+    // Grey out barrel if the remote player is locked out OR has run dry.
+    window.Renderer.setPlayerOverheated(
+      evt.id,
+      !!evt.overheated || !!evt.depleted
+    );
     if (isSelf) {
       fire.overheated = !!evt.overheated;
       fire.overheatedUntil = evt.overheatedUntil || 0;
+      fire.depleted = !!evt.depleted;
+      if (typeof evt.nextLockoutMs === 'number') {
+        fire.lockoutMs = evt.nextLockoutMs;
+      }
+      if (typeof evt.nextBurstCapacityMs === 'number') {
+        fire.burstCapacityMs = evt.nextBurstCapacityMs;
+      }
       applyFireUi();
     }
   });
@@ -220,10 +253,13 @@
     game.players = new Map(data.players.map((p) => [p.id, p]));
     if (data.fire) {
       fire.serverOffsetMs = (data.fire.serverTime || 0) - Date.now();
-      fire.lockoutMs = data.fire.lockoutMs || fire.lockoutMs;
+      fire.lockoutMs = data.fire.lockoutBaseMs || fire.lockoutMs;
+      fire.burstCapacityMs =
+        data.fire.burstCapacityBaseMs || fire.burstCapacityMs;
     }
     fire.overheated = false;
     fire.overheatedUntil = 0;
+    fire.depleted = false;
     applyFireUi();
 
     window.Renderer.renderAll({ maze: data.maze, players: data.players });

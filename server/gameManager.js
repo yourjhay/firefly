@@ -14,13 +14,21 @@ const BULLET_DAMAGE = 0.5;
 const FIRE_COOLDOWN_MS = 280;
 const BULLET_MAX_RANGE = 40;
 
-// Firing budget: each player can fire for a total of BURST_CAPACITY_MS in a
-// burst before overheating. Overheating locks them out for OVERHEAT_LOCKOUT_MS.
-// Between shots, the burst slowly regenerates (BURST_CAPACITY_MS of budget
-// over OVERHEAT_LOCKOUT_MS of idle time → full recovery in 10s).
-const BURST_CAPACITY_MS = 2000;
-const OVERHEAT_LOCKOUT_MS = 10000;
-const BURST_RECOVERY_RATE = BURST_CAPACITY_MS / OVERHEAT_LOCKOUT_MS; // 0.2 ms/ms
+// Firing budget (per round, per player):
+//   - Start with BURST_CAPACITY_MS_BASE of burst time and the
+//     OVERHEAT_LOCKOUT_MS_BASE lockout after a full burst.
+//   - Every subsequent overheat within the same round:
+//       next lockout   += OVERHEAT_LOCKOUT_STEP_MS   (10s → 15s → 20s → …)
+//       next opportunity -= BURST_CAPACITY_STEP_MS   (2s  → 1.5s → 1s  → …)
+//   - Once the opportunity hits 0 the player is "depleted" and cannot fire
+//     for the rest of the round. Everything resets on newMaze().
+//   - Between shots, the burst regenerates at 0.2 ms/ms of idle time so
+//     intermittent firing doesn't overheat.
+const BURST_CAPACITY_MS_BASE = 2000;
+const BURST_CAPACITY_STEP_MS = 500;
+const OVERHEAT_LOCKOUT_MS_BASE = 10000;
+const OVERHEAT_LOCKOUT_STEP_MS = 5000;
+const BURST_RECOVERY_RATE = BURST_CAPACITY_MS_BASE / OVERHEAT_LOCKOUT_MS_BASE; // 0.2 ms/ms
 
 const DIR_DELTAS = {
   up: [0, -1],
@@ -60,6 +68,10 @@ class GameManager {
       p.burstUsedMs = 0;
       p.overheated = false;
       p.overheatedUntil = 0;
+      p.nextBurstCapacityMs = BURST_CAPACITY_MS_BASE;
+      p.nextLockoutMs = OVERHEAT_LOCKOUT_MS_BASE;
+      p.appliedLockoutMs = OVERHEAT_LOCKOUT_MS_BASE;
+      p.depleted = false;
       if (p._overheatTimer) {
         clearTimeout(p._overheatTimer);
         p._overheatTimer = null;
@@ -102,6 +114,10 @@ class GameManager {
       burstUsedMs: 0,
       overheated: false,
       overheatedUntil: 0,
+      nextBurstCapacityMs: BURST_CAPACITY_MS_BASE,
+      nextLockoutMs: OVERHEAT_LOCKOUT_MS_BASE,
+      appliedLockoutMs: OVERHEAT_LOCKOUT_MS_BASE,
+      depleted: false,
       _overheatTimer: null,
     };
     this.players.set(id, player);
@@ -142,8 +158,10 @@ class GameManager {
       winnerId: this.winnerId,
       roundId: this.roundId,
       fire: {
-        burstCapacityMs: BURST_CAPACITY_MS,
-        lockoutMs: OVERHEAT_LOCKOUT_MS,
+        burstCapacityBaseMs: BURST_CAPACITY_MS_BASE,
+        burstCapacityStepMs: BURST_CAPACITY_STEP_MS,
+        lockoutBaseMs: OVERHEAT_LOCKOUT_MS_BASE,
+        lockoutStepMs: OVERHEAT_LOCKOUT_STEP_MS,
         serverTime: Date.now(),
       },
     };
@@ -197,6 +215,9 @@ class GameManager {
     if (!p) return;
     const now = Date.now();
 
+    // Out of opportunity for this round — nothing to do.
+    if (p.depleted) return;
+
     // Overheated? If lockout already elapsed, recover; otherwise deny.
     if (p.overheated) {
       if (now >= p.overheatedUntil) {
@@ -219,16 +240,31 @@ class GameManager {
     if (now - p.lastFireAt < FIRE_COOLDOWN_MS) return;
 
     // Not enough budget left for another shot — trip the overheat instead.
-    if (p.burstUsedMs + FIRE_COOLDOWN_MS > BURST_CAPACITY_MS) {
-      p.burstUsedMs = BURST_CAPACITY_MS;
+    // Both the NEXT lockout and the NEXT opportunity escalate per trigger.
+    if (p.burstUsedMs + FIRE_COOLDOWN_MS > p.nextBurstCapacityMs) {
+      const appliedLockout = p.nextLockoutMs;
+      p.appliedLockoutMs = appliedLockout;
+      p.burstUsedMs = p.nextBurstCapacityMs;
       p.overheated = true;
-      p.overheatedUntil = now + OVERHEAT_LOCKOUT_MS;
+      p.overheatedUntil = now + appliedLockout;
+
+      // Escalate for the next cycle.
+      p.nextLockoutMs = appliedLockout + OVERHEAT_LOCKOUT_STEP_MS;
+      p.nextBurstCapacityMs = Math.max(
+        0,
+        p.nextBurstCapacityMs - BURST_CAPACITY_STEP_MS
+      );
+      if (p.nextBurstCapacityMs <= 0) {
+        p.nextBurstCapacityMs = 0;
+        p.depleted = true;
+      }
+
       if (p._overheatTimer) clearTimeout(p._overheatTimer);
       p._overheatTimer = setTimeout(() => {
         if (!this.players.has(p.id)) return;
         this._endOverheat(p);
         this.broadcast(this._fireStateMessage(p));
-      }, OVERHEAT_LOCKOUT_MS);
+      }, appliedLockout);
       this.broadcast(this._fireStateMessage(p));
       return;
     }
@@ -312,8 +348,10 @@ class GameManager {
       overheated: p.overheated,
       overheatedUntil: p.overheated ? p.overheatedUntil : 0,
       burstUsedMs: p.burstUsedMs,
-      burstCapacityMs: BURST_CAPACITY_MS,
-      lockoutMs: OVERHEAT_LOCKOUT_MS,
+      nextBurstCapacityMs: p.nextBurstCapacityMs, // opportunity for the next burst
+      appliedLockoutMs: p.appliedLockoutMs,       // lockout that is currently in effect
+      nextLockoutMs: p.nextLockoutMs,             // lockout the next overheat will use
+      depleted: !!p.depleted,
       serverTime: Date.now(),
     };
   }
@@ -329,6 +367,9 @@ function serializePlayer(p) {
     facing: p.facing || 'right',
     overheated: !!p.overheated,
     overheatedUntil: p.overheated ? p.overheatedUntil : 0,
+    nextBurstCapacityMs: p.nextBurstCapacityMs ?? BURST_CAPACITY_MS_BASE,
+    nextLockoutMs: p.nextLockoutMs ?? OVERHEAT_LOCKOUT_MS_BASE,
+    depleted: !!p.depleted,
   };
 }
 
