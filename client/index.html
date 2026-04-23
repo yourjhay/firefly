@@ -10,9 +10,32 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <div id="sessionModal" class="session-modal" aria-modal="true" role="dialog">
+      <div class="session-card">
+        <h1 class="session-title">Maze Race</h1>
+        <p class="session-sub">Host a private room and share the code, or join a friend.</p>
+        <button type="button" id="hostBtn" class="session-primary">Host game</button>
+        <div class="session-join">
+          <label class="session-label" for="joinCode">Join code</label>
+          <input
+            id="joinCode"
+            type="text"
+            inputmode="text"
+            maxlength="6"
+            placeholder="FL1234"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button type="button" id="joinBtn" class="session-primary">Join game</button>
+        </div>
+        <p id="sessionError" class="session-error hidden" role="alert"></p>
+      </div>
+    </div>
+
     <header id="hud">
       <div class="hud-left">
-        <span id="status" class="pill">Connecting…</span>
+        <span id="status" class="pill">Lobby</span>
+        <span id="roomPill" class="pill muted hidden">Room —</span>
         <span id="roundLabel" class="pill muted">Round —</span>
       </div>
       <div class="hud-right">
