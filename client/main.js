@@ -8,7 +8,46 @@
     banner: document.getElementById('banner'),
     serverBtn: document.getElementById('serverBtn'),
     firePill: document.getElementById('firePill'),
+    roomPill: document.getElementById('roomPill'),
+    sessionModal: document.getElementById('sessionModal'),
+    sessionError: document.getElementById('sessionError'),
+    joinCode: document.getElementById('joinCode'),
   };
+
+  const hostBtn = document.getElementById('hostBtn');
+  const joinBtn = document.getElementById('joinBtn');
+
+  function showSessionModal() {
+    if (ui.sessionModal) ui.sessionModal.classList.remove('hidden');
+  }
+
+  function clearSessionError() {
+    if (ui.sessionError) {
+      ui.sessionError.classList.add('hidden');
+      ui.sessionError.textContent = '';
+    }
+  }
+
+  function hideSessionModal() {
+    if (ui.sessionModal) ui.sessionModal.classList.add('hidden');
+  }
+
+  function setSessionErrorMsg(msg) {
+    if (!ui.sessionError) return;
+    ui.sessionError.textContent = msg;
+    ui.sessionError.classList.remove('hidden');
+  }
+
+  function normalizeJoinCode(raw) {
+    return String(raw || '')
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '');
+  }
+
+  function isValidJoinCode(s) {
+    return /^[A-Z]{2}\d{4}$/.test(s);
+  }
 
   // Fire/overheat state (for HUD + fire button styling).
   const fire = {
@@ -111,13 +150,70 @@
     );
     if (input === null) return;
     const trimmed = input.trim();
+    game.self = null;
     window.Net.switchServer(trimmed || null);
+    game.players = new Map();
+    game.state = 'connecting';
+    if (ui.roomPill) ui.roomPill.classList.add('hidden');
+    hideBanner();
+    window.Renderer.teardown();
+    setStatus('Lobby');
+    showSessionModal();
   });
 
-  window.Net.on('status', ({ connected, url, connecting }) => {
+  if (hostBtn) {
+    hostBtn.addEventListener('click', () => {
+      clearSessionError();
+      window.Net.beginCreateSession();
+    });
+  }
+
+  if (joinBtn && ui.joinCode) {
+    joinBtn.addEventListener('click', () => {
+      const code = normalizeJoinCode(ui.joinCode.value);
+      if (!isValidJoinCode(code)) {
+        setSessionErrorMsg('Enter a code like FL1234 (2 letters + 4 digits).');
+        return;
+      }
+      clearSessionError();
+      window.Net.beginJoinSession(code);
+    });
+  }
+
+  if (ui.joinCode) {
+    ui.joinCode.addEventListener('input', () => {
+      let v = ui.joinCode.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (v.length > 6) v = v.slice(0, 6);
+      ui.joinCode.value = v;
+    });
+  }
+
+  window.Net.on('status', ({ connected, url, connecting, left }) => {
+    if (left) {
+      setStatus('Lobby');
+      return;
+    }
+    if (!game.self) {
+      if (connected) setStatus('Joining…', url);
+      else if (connecting) setStatus('Connecting…', url);
+      else setStatus('Disconnected — retrying…', url);
+      return;
+    }
     if (connected) setStatus('Connected', url);
     else if (connecting) setStatus('Connecting…', url);
     else setStatus('Disconnected — retrying…', url);
+  });
+
+  window.Net.on('sessionError', (msg) => {
+    const reason = msg && msg.code;
+    const map = {
+      NOT_FOUND: 'No room with that code.',
+      BAD_REQUEST: 'Invalid code. Use 2 letters and 4 digits (e.g. FL1234).',
+      ALREADY_IN_SESSION: 'Already in a session. Refresh the page to start over.',
+      NOT_IN_SESSION: 'Not in a room yet.',
+    };
+    setSessionErrorMsg(map[reason] || `Could not join (${reason || 'error'}).`);
+    showSessionModal();
   });
 
   window.Net.on('init', (data) => {
@@ -125,6 +221,13 @@
     game.roundId = data.roundId;
     game.state = data.state;
     game.players = new Map(data.players.map((p) => [p.id, p]));
+
+    hideSessionModal();
+    if (data.roomCode && ui.roomPill) {
+      ui.roomPill.textContent = `Room ${data.roomCode}`;
+      ui.roomPill.classList.remove('hidden');
+      window.Net.setResumeRoomCode(data.roomCode);
+    }
 
     if (data.fire) {
       fire.serverOffsetMs = (data.fire.serverTime || 0) - Date.now();
@@ -173,7 +276,7 @@
   });
 
   window.Net.on('playerJoined', ({ player }) => {
-    if (!player) return;
+    if (!game.self || !player) return;
     game.players.set(player.id, player);
     window.Renderer.addPlayer(player);
     if (player.overheated || player.depleted) {
@@ -183,12 +286,14 @@
   });
 
   window.Net.on('playerLeft', ({ id }) => {
+    if (!game.self) return;
     game.players.delete(id);
     window.Renderer.removePlayer(id);
     updateHud();
   });
 
   window.Net.on('playerMoved', ({ id, x, y, facing }) => {
+    if (!game.self) return;
     const p = game.players.get(id);
     if (p) {
       p.x = x;
@@ -199,17 +304,19 @@
   });
 
   window.Net.on('playerFaced', ({ id, facing }) => {
+    if (!game.self) return;
     const p = game.players.get(id);
     if (p) p.facing = facing;
     window.Renderer.setPlayerFacing(id, facing);
   });
 
   window.Net.on('bullet', (evt) => {
+    if (!game.self) return;
     window.Renderer.spawnBullet(evt);
   });
 
   window.Net.on('fireState', (evt) => {
-    if (!evt) return;
+    if (!game.self || !evt) return;
     if (typeof evt.serverTime === 'number') {
       fire.serverOffsetMs = evt.serverTime - Date.now();
     }
@@ -234,6 +341,7 @@
   });
 
   window.Net.on('gameOver', ({ winner, resetInMs }) => {
+    if (!game.self) return;
     game.state = 'finished';
     const isYou = winner && game.self && winner.id === game.self.id;
     const name = winner ? winner.name : 'Someone';
@@ -248,6 +356,7 @@
   });
 
   window.Net.on('newRound', (data) => {
+    if (!game.self) return;
     game.state = data.state;
     game.roundId = data.roundId;
     game.players = new Map(data.players.map((p) => [p.id, p]));
@@ -268,5 +377,15 @@
     updateHud();
   });
 
-  window.Net.connect();
+  const params = new URLSearchParams(window.location.search);
+  const urlCode = params.get('code');
+  if (urlCode && ui.joinCode) {
+    const c = normalizeJoinCode(urlCode);
+    ui.joinCode.value = c;
+    if (isValidJoinCode(c)) {
+      window.Net.beginJoinSession(c);
+    } else {
+      setSessionErrorMsg('Invalid ?code= in link. Use FL1234 (2 letters + 4 digits).');
+    }
+  }
 })();
