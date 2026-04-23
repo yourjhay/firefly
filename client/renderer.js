@@ -20,7 +20,7 @@
     wallCrackEntities: new Map(), // "x,y" -> array of crack child entities
     roundId: 0,
     fogTiles: new Map(),      // "x,y" -> fog entity
-    visible: new Set(),       // "x,y" keys currently lit (fog hidden). Recomputed on every move.
+    visible: new Map(),       // "x,y" -> fog opacity; replaced each reveal step
     currentMaze: null,        // reference to the latest maze grid (for LOS reveal)
     selfId: null,
     tileSize: TILE,
@@ -88,6 +88,22 @@
 
   function init(selfId) {
     state.selfId = selfId;
+  }
+
+  function teardown() {
+    const el = document.getElementById('game');
+    if (el) el.innerHTML = '';
+    state.k = null;
+    state.goal = null;
+    state.playerEntities.clear();
+    state.playerBarrels.clear();
+    state.wallEntities.clear();
+    state.fogTiles.clear();
+    state.visible = new Map();
+    state.currentMaze = null;
+    state.selfId = null;
+    state.mazeWidth = 0;
+    state.mazeHeight = 0;
   }
 
   function setupKaboomFor(maze) {
@@ -696,6 +712,7 @@
 
   window.Renderer = {
     init,
+    teardown,
     renderAll,
     addPlayer,
     removePlayer,

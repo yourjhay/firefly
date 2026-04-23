@@ -30,7 +30,27 @@ Each round uses a **new random maze**. Spawn at the start tile; **first player t
 ### Rounds and disconnects
 
 - After a win, the server broadcasts **game over**, then starts a **new round** after a few seconds with a **fresh maze** and **reset positions** (fire limits reset too).
-- When the **last** player disconnects, the server clears the round counter so the next join starts from **round 1** on a new maze.
+- When the **last** player in a **room** disconnects, that room is destroyed and its invite code is freed. The next host gets a new maze and a new code.
+
+## Private rooms (invite codes)
+
+There is **no global public lobby**. Each browser must either **Host game** (creates a room and shows a code like `FL1234`) or **Join game** with a friend’s code.
+
+- Codes are **two letters + four digits** (A–Z, 0–9), case-insensitive when typing. Newly hosted codes never use **W, A, S, or D** as either letter (so they are not confused with movement keys); joining still accepts any valid pair if you type it manually.
+- All WebSocket traffic for a room is isolated: movement, shots, and chat-style events only go to players in that room.
+- Rooms live **in memory** on the Node process; restarting the server clears every room.
+
+**Shareable link:** open the game with a query param so joiners skip typing (still uses your configured WebSocket server URL):
+
+```
+http://localhost:3000/?code=FL1234
+```
+
+You can combine with a custom server:
+
+```
+http://localhost:3000/?server=ws://example.com/ws&code=FL1234
+```
 
 ## Quick start
 
@@ -39,7 +59,7 @@ npm install
 npm start
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in one or more browsers to play.
+Open [http://localhost:3000](http://localhost:3000). In the first browser choose **Host game** and note the room code. In another browser (or device) choose **Join game** and enter that code.
 
 ### Play from another device on the same Wi-Fi
 
@@ -83,11 +103,21 @@ PORT=8080 WS_PATH=/ws MAZE_COLS=15 MAZE_ROWS=15 npm start
 
 All messages are JSON objects with a `type` field.
 
+After the WebSocket opens, the client must send exactly one of:
+
+- `{ "type": "createSession" }` — create a new room; you become the first player.
+- `{ "type": "joinSession", "code": "FL1234" }` — join an existing room (`code` normalized server-side).
+
+Until one of these succeeds, the server will not send `init`. Unknown or malformed join codes receive `sessionError` (see below).
+
 ### Server → client
 
-| `type`         | Fields                                                        | When                                                   |
-| -------------- | ------------------------------------------------------------- | ------------------------------------------------------ |
-| `init`         | `you`, `maze`, `wallHp`, `players`, `state`, `winnerId`, `roundId` | Sent once on connect (see `wallHp` below)              |
+| `type`           | Fields                                                        | When                                                   |
+| ---------------- | ------------------------------------------------------------- | ------------------------------------------------------ |
+| `sessionCreated` | `code`                                                        | You hosted a room (sent just before `init`)            |
+| `sessionJoined`  | `code`                                                        | You joined an existing room (sent just before `init`) |
+| `sessionError`   | `code` — one of `NOT_FOUND`, `BAD_REQUEST`, `ALREADY_IN_SESSION`, `NOT_IN_SESSION` | Invalid join / bad state                               |
+| `init`           | `roomCode`, `you`, `maze`, `players`, `state`, `winnerId`, `roundId`, … | After a successful create/join                         |
 | `playerJoined` | `player: { id, name, color, x, y, facing, … }`                | Another client connected                               |
 | `playerLeft`   | `id`                                                          | A client disconnected                                  |
 | `playerFaced`  | `id`, `facing`                                                | Facing changed (including when a move was blocked)     |
@@ -101,11 +131,13 @@ All messages are JSON objects with a `type` field.
 
 ### Client → server
 
-| `type` | Fields       | Notes                                        |
-| ------ | ------------ | -------------------------------------------- |
-| `move` | `dir`        | `"up" \| "down" \| "left" \| "right"`        |
-| `fire` | _(none)_     | Fire a bullet in the player’s current facing |
-| `ping` | `t` (number) | Optional; echoed back in `pong` for latency  |
+| `type`           | Fields        | Notes                                        |
+| ---------------- | ------------- | -------------------------------------------- |
+| `createSession`  | _(none)_      | Create a private room; server assigns `code` |
+| `joinSession`    | `code` string | Join room `FL1234` style code               |
+| `move`           | `dir`         | `"up" \| "down" \| "left" \| "right"` (only after `init`) |
+| `fire`           | _(none)_      | Fire a bullet in the player’s current facing |
+| `ping`           | `t` (number)  | Optional; echoed back in `pong` for latency  |
 
 Movement is grid-based, one tile at a time. The server enforces a per-player ~70 ms cooldown so held inputs do not flood.
 
@@ -113,9 +145,10 @@ Movement is grid-based, one tile at a time. The server enforces a per-player ~70
 
 ```
 server/
-  server.js         Express + `ws` bootstrap, connection handling
-  gameManager.js    Players, state, move validation, win detection
-  mazeGenerator.js  Recursive-backtracking maze
+  server.js          Express + `ws` bootstrap, session handshake, routing
+  sessionManager.js  Invite codes, per-room `GameManager` + socket fan-out
+  gameManager.js     Players, state, move validation, win detection
+  mazeGenerator.js   Recursive-backtracking maze
 client/
   index.html
   main.js           Wires network events to renderer + HUD

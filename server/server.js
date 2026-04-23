@@ -3,7 +3,7 @@ const http = require('http');
 const path = require('path');
 const express = require('express');
 const { WebSocketServer } = require('ws');
-const { GameManager } = require('./gameManager');
+const { SessionManager } = require('./sessionManager');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const COLS = parseInt(process.env.MAZE_COLS || '10', 10);
@@ -16,38 +16,60 @@ app.use(express.static(path.join(__dirname, '..', 'client')));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: WS_PATH });
 
-// id -> ws
-const sockets = new Map();
+const sessionManager = new SessionManager({ cols: COLS, rows: ROWS });
 
 function send(ws, msg) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
 }
 
-function broadcast(msg, exceptId) {
-  const payload = JSON.stringify(msg);
-  for (const [id, ws] of sockets) {
-    if (id === exceptId) continue;
-    if (ws.readyState === ws.OPEN) ws.send(payload);
-  }
-}
-
-const game = new GameManager({ broadcast, cols: COLS, rows: ROWS });
-
-wss.on('connection', (ws, req) => {
-  const id = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
-  sockets.set(id, ws);
-  const player = game.addPlayer(id);
-  console.log(
-    `[+] ${player.name} joined from ${req.socket.remoteAddress} (${game.players.size} total)`
-  );
-
+function sendInit(ws, code, player, game) {
+  send(ws, { type: 'sessionCreated', code });
   send(ws, {
     type: 'init',
+    roomCode: code,
     you: { id: player.id, name: player.name, color: player.color },
     ...game.snapshot(),
   });
+}
 
-  // Heartbeat: drop dead clients so their player is removed from the maze.
+function sendInitJoin(ws, code, player, game) {
+  send(ws, { type: 'sessionJoined', code });
+  send(ws, {
+    type: 'init',
+    roomCode: code,
+    you: { id: player.id, name: player.name, color: player.color },
+    ...game.snapshot(),
+  });
+}
+
+function attachSession(ws, code, playerId, game) {
+  ws.sessionCode = code;
+  ws.playerId = playerId;
+  ws.game = game;
+  sessionManager.registerSocket(code, playerId, ws);
+}
+
+function detachSession(ws) {
+  const code = ws.sessionCode;
+  const playerId = ws.playerId;
+  const game = ws.game;
+  if (!code || !playerId || !game) return;
+  sessionManager.unregisterSocket(code, playerId);
+  game.removePlayer(playerId);
+  sessionManager.destroySessionIfEmpty(code);
+  ws.sessionCode = null;
+  ws.playerId = null;
+  ws.game = null;
+}
+
+wss.on('connection', (ws, req) => {
+  const playerId = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+  ws.playerId = playerId;
+  ws.sessionCode = null;
+  ws.game = null;
+
+  console.log(`[ws] client ${playerId} connected from ${req.socket.remoteAddress}`);
+
   ws.isAlive = true;
   ws.on('pong', () => {
     ws.isAlive = true;
@@ -63,11 +85,55 @@ wss.on('connection', (ws, req) => {
     if (!msg || typeof msg !== 'object') return;
 
     switch (msg.type) {
+      case 'createSession': {
+        if (ws.sessionCode) {
+          send(ws, { type: 'sessionError', code: 'ALREADY_IN_SESSION' });
+          return;
+        }
+        const { code, game } = sessionManager.createSession();
+        attachSession(ws, code, playerId, game);
+        const player = game.addPlayer(playerId);
+        console.log(`[+] ${player.name} hosted ${code} (${game.players.size} in room)`);
+        sendInit(ws, code, player, game);
+        break;
+      }
+      case 'joinSession': {
+        if (ws.sessionCode) {
+          send(ws, { type: 'sessionError', code: 'ALREADY_IN_SESSION' });
+          return;
+        }
+        const raw = typeof msg.code === 'string' ? msg.code : '';
+        const normalized = sessionManager.normalizeCode(raw);
+        if (!sessionManager.isValidCodeFormat(normalized)) {
+          send(ws, { type: 'sessionError', code: 'BAD_REQUEST' });
+          return;
+        }
+        const game = sessionManager.getGameForJoin(normalized);
+        if (!game) {
+          send(ws, { type: 'sessionError', code: 'NOT_FOUND' });
+          return;
+        }
+        attachSession(ws, normalized, playerId, game);
+        const player = game.addPlayer(playerId);
+        console.log(
+          `[+] ${player.name} joined ${normalized} (${game.players.size} in room)`
+        );
+        sendInitJoin(ws, normalized, player, game);
+        break;
+      }
       case 'move':
-        if (typeof msg.dir === 'string') game.move(id, msg.dir);
+        if (!ws.sessionCode || !ws.game) {
+          send(ws, { type: 'sessionError', code: 'NOT_IN_SESSION' });
+          return;
+        }
+        if (typeof msg.dir === 'string') ws.game.move(playerId, msg.dir);
         break;
       case 'fire':
-        game.fire(id);
+        if (!ws.sessionCode || !ws.game) {
+          send(ws, { type: 'sessionError', code: 'NOT_IN_SESSION' });
+          return;
+        }
+        ws.game.fire(playerId);
         break;
       case 'ping':
         send(ws, { type: 'pong', t: msg.t });
@@ -78,25 +144,27 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('close', () => {
-    sockets.delete(id);
-    game.removePlayer(id);
-    console.log(`[-] ${player.name} left (${game.players.size} total)`);
+    if (ws.sessionCode && ws.game) {
+      const name = ws.game.players.get(ws.playerId)?.name || ws.playerId;
+      detachSession(ws);
+      console.log(`[-] ${name} left`);
+    }
   });
 
   ws.on('error', () => {
-    // `close` will run after this; nothing extra to do.
+    // `close` runs after this.
   });
 });
 
 const heartbeat = setInterval(() => {
-  for (const ws of wss.clients) {
-    if (ws.isAlive === false) {
-      ws.terminate();
+  for (const client of wss.clients) {
+    if (client.isAlive === false) {
+      client.terminate();
       continue;
     }
-    ws.isAlive = false;
+    client.isAlive = false;
     try {
-      ws.ping();
+      client.ping();
     } catch {
       // ignore
     }

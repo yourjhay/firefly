@@ -1,8 +1,11 @@
 // Plain WebSocket client with auto-reconnect and a tiny event bus.
+// After connect, the client must complete a session handshake:
+//   { type: 'createSession' } or { type: 'joinSession', code: 'FL1234' }
+//
 // Server URL resolution (first match wins):
 //   1. ?server=ws://host[:port][/path]   (URL override, remembered in localStorage)
 //   2. localStorage "maze.serverUrl"
-//   3. same-origin ws(s)://<host>/ws     (default: talk to the page's host)
+//   3. same-origin ws(s)://<host>/ws     (default)
 (function () {
   const STORAGE_KEY = 'maze.serverUrl';
   const listeners = {};
@@ -41,19 +44,48 @@
   }
 
   let ws = null;
-  let connected = false;
   let reconnectAttempts = 0;
   let reconnectTimer = null;
   let currentUrl = null;
+  /** @type {null | 'create' | { type: 'join', code: string }} */
+  let pendingIntent = null;
+  let resumeRoomCode = null;
+  let suppressReconnect = false;
+
+  function clearSessionState() {
+    pendingIntent = null;
+    resumeRoomCode = null;
+  }
+
+  function setResumeRoomCode(code) {
+    resumeRoomCode = code || null;
+  }
 
   function scheduleReconnect() {
-    if (reconnectTimer) return;
+    if (reconnectTimer || suppressReconnect) return;
     const delay = Math.min(15000, 500 * Math.pow(2, reconnectAttempts));
     reconnectAttempts += 1;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       connect();
     }, delay);
+  }
+
+  function tryHandshake() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (pendingIntent === 'create') {
+      ws.send(JSON.stringify({ type: 'createSession' }));
+      pendingIntent = null;
+      return;
+    }
+    if (pendingIntent && pendingIntent.type === 'join') {
+      ws.send(JSON.stringify({ type: 'joinSession', code: pendingIntent.code }));
+      pendingIntent = null;
+      return;
+    }
+    if (resumeRoomCode) {
+      ws.send(JSON.stringify({ type: 'joinSession', code: resumeRoomCode }));
+    }
   }
 
   function connect(url) {
@@ -71,19 +103,22 @@
     }
 
     ws.addEventListener('open', () => {
-      connected = true;
       reconnectAttempts = 0;
       emit('status', { connected: true, url: currentUrl });
+      tryHandshake();
     });
 
     ws.addEventListener('close', () => {
-      connected = false;
       emit('status', { connected: false, url: currentUrl });
+      if (suppressReconnect) {
+        suppressReconnect = false;
+        return;
+      }
       scheduleReconnect();
     });
 
     ws.addEventListener('error', () => {
-      // Browser fires close after error; let that handler reconnect.
+      // Browser fires close after error.
     });
 
     ws.addEventListener('message', (evt) => {
@@ -108,8 +143,9 @@
     ws.send(JSON.stringify({ type: 'fire' }));
   }
 
-  function switchServer(url) {
-    setServerUrl(url);
+  function beginCreateSession() {
+    pendingIntent = 'create';
+    suppressReconnect = false;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -119,9 +155,50 @@
       try {
         ws.close();
       } catch {}
+      ws = null;
     }
+    connect(currentUrl || resolveServerUrl());
+  }
+
+  function beginJoinSession(code) {
+    pendingIntent = { type: 'join', code };
+    suppressReconnect = false;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    reconnectAttempts = 0;
+    if (ws) {
+      try {
+        ws.close();
+      } catch {}
+      ws = null;
+    }
+    connect(currentUrl || resolveServerUrl());
+  }
+
+  function leaveSession() {
+    suppressReconnect = true;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    reconnectAttempts = 0;
+    clearSessionState();
+    if (ws) {
+      try {
+        ws.close();
+      } catch {}
+      ws = null;
+    }
+    emit('status', { connected: false, url: currentUrl || resolveServerUrl(), left: true });
+  }
+
+  function switchServer(url) {
+    setServerUrl(url);
+    leaveSession();
     currentUrl = url || resolveServerUrl();
-    connect(currentUrl);
+    emit('status', { connected: false, url: currentUrl });
   }
 
   window.Net = {
@@ -129,6 +206,11 @@
     on,
     sendMove,
     sendFire,
+    beginCreateSession,
+    beginJoinSession,
+    leaveSession,
+    clearSessionState,
+    setResumeRoomCode,
     switchServer,
     getServerUrl: () => currentUrl,
     resolveServerUrl,
