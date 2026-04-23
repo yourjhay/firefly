@@ -6,6 +6,9 @@ const PLAYER_COLORS = [
   '#22d3ee', '#e11d48',
 ];
 
+/** Max players in one room (host + guests). */
+const MAX_PLAYERS_PER_ROOM = 13;
+
 const MOVE_COOLDOWN_MS = 70;
 const RESET_DELAY_MS = 5000;
 
@@ -121,6 +124,7 @@ class GameManager {
   }
 
   addPlayer(id) {
+    if (this.players.size >= MAX_PLAYERS_PER_ROOM) return null;
     const player = {
       id,
       name: id.slice(0, 4).toUpperCase(),
@@ -400,4 +404,4 @@ function serializePlayer(p) {
   };
 }
 
-module.exports = { GameManager };
+module.exports = { GameManager, MAX_PLAYERS_PER_ROOM };

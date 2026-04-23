@@ -12,7 +12,7 @@
   <body>
     <div id="sessionModal" class="session-modal" aria-modal="true" role="dialog">
       <div class="session-card">
-        <h1 class="session-title">Maze Race</h1>
+        <h1 class="session-title">Fireflies.io</h1>
         <p class="session-sub">Host a private room and share the code, or join a friend.</p>
         <button type="button" id="hostBtn" class="session-primary">Host game</button>
         <div class="session-join">
@@ -35,7 +35,15 @@
     <header id="hud">
       <div class="hud-left">
         <span id="status" class="pill">Lobby</span>
-        <span id="roomPill" class="pill muted hidden">Room —</span>
+        <button
+          type="button"
+          id="roomPill"
+          class="pill muted pill-btn hidden"
+          title="Copy invite link"
+          aria-label="Copy invite link"
+        >
+          Room —
+        </button>
         <span id="roundLabel" class="pill muted">Round —</span>
       </div>
       <div class="hud-right">
