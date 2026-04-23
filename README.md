@@ -122,10 +122,12 @@ Until one of these succeeds, the server will not send `init`. Unknown or malform
 | `playerLeft`   | `id`                                                          | A client disconnected                                  |
 | `playerFaced`  | `id`, `facing`                                                | Facing changed (including when a move was blocked)     |
 | `playerMoved`  | `id`, `x`, `y`, `facing`                                      | After a valid move                                     |
-| `bullet`       | `shooterId`, `color`, `from`, `to`, `dir`, `hitKind`, `destroyed` | Shot ray result (wall hit / range / border)       |
+| `bullet`       | `shooterId`, `color`, `from`, `to`, `dir`, `hitKind`, `destroyed`, `wallHpAfter?` | Shot ray result; `wallHpAfter` = inner-wall HP after hit when `hitKind` is `wall` |
 | `fireState`    | `id`, `overheated`, `overheatedUntil`, `burstUsedMs`, `nextBurstCapacityMs`, `depleted`, … | Fire/overheat budget for a player              |
 | `gameOver`     | `winnerId`, `winner`, `resetInMs`                             | A player reached the goal                              |
-| `newRound`     | `maze`, `players`, `state`, `roundId`, `fire`, …              | Fresh maze + reset positions (fired on round rollover) |
+| `newRound`     | `maze`, `wallHp`, `players`, `state`, `roundId`, `fire`, …    | Fresh maze + reset positions (fired on round rollover) |
+
+`wallHp` is a 2D array aligned with `maze.grid`: `0` = path, `-1` = indestructible border wall, `>0` = remaining HP for inner walls (for client damage visuals).
 
 ### Client → server
 

@@ -81,7 +81,7 @@ class GameManager {
 
   // 2D array mirroring the maze grid. Path tiles have 0 HP (not applicable),
   // outer-border walls are Infinity (indestructible), everything else starts
-  // with WALL_HP_DEFAULT. Kept server-only — clients never see HP values.
+  // with WALL_HP_DEFAULT.
   _buildWallHp() {
     const { grid, width, height } = this.maze;
     const hp = Array.from({ length: height }, () => Array(width).fill(0));
@@ -93,6 +93,25 @@ class GameManager {
       }
     }
     return hp;
+  }
+
+  // JSON-friendly grid for snapshots: 0 = path, -1 = indestructible border, >0 = remaining HP.
+  _serializeWallHp() {
+    const { grid, width, height } = this.maze;
+    const out = [];
+    for (let y = 0; y < height; y++) {
+      const row = [];
+      for (let x = 0; x < width; x++) {
+        if (grid[y][x] === 0) {
+          row.push(0);
+        } else {
+          const h = this.wallHp[y][x];
+          row.push(h === Infinity ? -1 : h);
+        }
+      }
+      out.push(row);
+    }
+    return out;
   }
 
   nextColor() {
@@ -153,6 +172,7 @@ class GameManager {
   snapshot() {
     return {
       maze: this.maze,
+      wallHp: this._serializeWallHp(),
       players: Array.from(this.players.values()).map(serializePlayer),
       state: this.state,
       winnerId: this.winnerId,
@@ -281,6 +301,7 @@ class GameManager {
     let hit = { x: cx, y: cy };
     let hitKind = 'maxRange';
     let destroyed = false;
+    let wallHpAfter;
 
     for (let step = 0; step < BULLET_MAX_RANGE; step++) {
       const nx = cx + dx;
@@ -301,8 +322,10 @@ class GameManager {
             this.maze.grid[ny][nx] = 0;
             this.wallHp[ny][nx] = 0;
             destroyed = true;
+            wallHpAfter = 0;
           } else {
             this.wallHp[ny][nx] = newHp;
+            wallHpAfter = newHp;
           }
           hitKind = 'wall';
         }
@@ -313,7 +336,7 @@ class GameManager {
       hit = { x: cx, y: cy };
     }
 
-    this.broadcast({
+    const bulletMsg = {
       type: 'bullet',
       shooterId: id,
       color: p.color,
@@ -322,7 +345,11 @@ class GameManager {
       dir: p.facing,
       hitKind,
       destroyed,
-    });
+    };
+    if (hitKind === 'wall' && wallHpAfter !== undefined) {
+      bulletMsg.wallHpAfter = wallHpAfter;
+    }
+    this.broadcast(bulletMsg);
   }
 
   reset() {

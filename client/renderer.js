@@ -5,6 +5,11 @@
   const TILE = 32; // logical tile size (the canvas is CSS-scaled to fit)
   const lerp = (a, b, t) => a + (b - a) * t;
 
+  // Match server/gameManager.js (for crack threshold after 3 hits).
+  const WALL_HP_DEFAULT = 5;
+  const BULLET_DAMAGE = 0.5;
+  const CRACKS_AFTER_HITS = 3;
+
   const state = {
     k: null,
     mazeLayer: [],
@@ -12,6 +17,8 @@
     playerEntities: new Map(),
     playerBarrels: new Map(), // playerId -> barrel entity
     wallEntities: new Map(),  // "x,y" -> wall entity
+    wallCrackEntities: new Map(), // "x,y" -> array of crack child entities
+    roundId: 0,
     fogTiles: new Map(),      // "x,y" -> fog entity
     visible: new Map(),       // "x,y" -> fog opacity; replaced each reveal step
     currentMaze: null,        // reference to the latest maze grid (for LOS reveal)
@@ -27,6 +34,57 @@
   const FOG_VISION_RADIUS = 5; // LOS raycast reach (blocked by walls)
   const FOG_GLOW_RADIUS = 3;   // small halo that always reveals (ignores walls)
   const FOG_FEATHER = 1.75;    // width (in tiles) of the soft gradient at each radius edge
+
+  function shouldShowWallCracks(hp) {
+    if (hp == null || hp <= 0 || hp === -1) return false;
+    return WALL_HP_DEFAULT - hp + 1e-6 >= CRACKS_AFTER_HITS * BULLET_DAMAGE;
+  }
+
+  function hash01(x, y, r, salt) {
+    const n =
+      Math.sin((x + 1) * 12.9898 + (y + 1) * 78.233 + (r + 1) * 19.123 + salt * 4.141) *
+      43758.5453;
+    return n - Math.floor(n);
+  }
+
+  function removeWallCrackAt(key) {
+    const ents = state.wallCrackEntities.get(key);
+    if (ents) {
+      ents.forEach((e) => e.destroy());
+      state.wallCrackEntities.delete(key);
+    }
+  }
+
+  function setWallCrackVisual(x, y, hp) {
+    const k = state.k;
+    if (!k) return;
+    const key = `${x},${y}`;
+    removeWallCrackAt(key);
+    if (!shouldShowWallCracks(hp)) return;
+
+    const T = state.tileSize;
+    const r = state.roundId;
+    const lines = [];
+    for (let i = 0; i < 3; i++) {
+      const angDeg = (hash01(x, y, r, i * 3) - 0.5) * 150;
+      const len = 7 + hash01(x, y, r, i * 3 + 1) * 12;
+      const ox = hash01(x, y, r, i * 3 + 2) * (T - 6) + 3;
+      const oy = hash01(x, y, r, i * 3 + 3) * (T - 6) + 3;
+      lines.push(
+        k.add([
+          k.rect(2, len),
+          k.pos(x * T + ox, y * T + oy),
+          k.anchor('center'),
+          k.rotate(angDeg),
+          k.color(20, 22, 38),
+          k.opacity(0.88),
+          k.z(3),
+          'wallCrack',
+        ])
+      );
+    }
+    state.wallCrackEntities.set(key, lines);
+  }
 
   function init(selfId) {
     state.selfId = selfId;
@@ -83,11 +141,13 @@
     });
   }
 
-  function buildMaze(maze) {
+  function buildMaze(maze, wallHp) {
     const k = state.k;
     if (!k) return;
 
     // Clear old entities.
+    k.get('wallCrack').forEach((e) => e.destroy());
+    state.wallCrackEntities.clear();
     k.get('wall').forEach((e) => e.destroy());
     k.get('path').forEach((e) => e.destroy());
     k.get('goal').forEach((e) => e.destroy());
@@ -116,6 +176,9 @@
             { gx: x, gy: y },
           ]);
           state.wallEntities.set(`${x},${y}`, wall);
+          if (wallHp && wallHp[y] && wallHp[y][x] != null) {
+            setWallCrackVisual(x, y, wallHp[y][x]);
+          }
         }
       }
     }
@@ -492,7 +555,7 @@
 
   // Animate a bullet from `from` tile to `to` tile. If `destroyed` is true,
   // the wall at `to` is removed on bullet arrival.
-  function spawnBullet({ shooterId, color, from, to, destroyed }) {
+  function spawnBullet({ shooterId, color, from, to, hitKind, wallHpAfter, destroyed }) {
     const k = state.k;
     if (!k) return;
     const T = state.tileSize;
@@ -527,16 +590,28 @@
       bullet.pos.x = fromPx.x + (toPx.x - fromPx.x) * t;
       bullet.pos.y = fromPx.y + (toPx.y - fromPx.y) * t;
       if (t >= 1) {
-        onBulletArrived(bullet.pos.x, bullet.pos.y, to, destroyed, [r, g, b]);
+        onBulletArrived(
+          bullet.pos.x,
+          bullet.pos.y,
+          to,
+          hitKind,
+          wallHpAfter,
+          destroyed,
+          [r, g, b]
+        );
         bullet.destroy();
       }
     });
   }
 
-  function onBulletArrived(px, py, gridPos, destroyed, rgb) {
+  function onBulletArrived(px, py, gridPos, hitKind, wallHpAfter, destroyed, rgb) {
     const k = state.k;
     if (!k) return;
     const T = state.tileSize;
+
+    if (!destroyed && hitKind === 'wall' && wallHpAfter != null && gridPos) {
+      setWallCrackVisual(gridPos.x, gridPos.y, wallHpAfter);
+    }
 
     // Impact flash — short-lived expanding ring in the shooter's color.
     const flash = k.add([
@@ -560,6 +635,7 @@
 
     if (destroyed && gridPos) {
       const key = `${gridPos.x},${gridPos.y}`;
+      removeWallCrackAt(key);
       const wall = state.wallEntities.get(key);
       if (wall) {
         wall.destroy();
@@ -610,7 +686,8 @@
       setupKaboomFor(data.maze);
     }
 
-    buildMaze(data.maze);
+    state.roundId = data.roundId != null ? data.roundId : 0;
+    buildMaze(data.maze, data.wallHp);
 
     // Reset players.
     state.playerEntities.forEach((ent) => ent.destroy());
