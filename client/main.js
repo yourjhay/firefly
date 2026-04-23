@@ -106,10 +106,34 @@
 
   const game = {
     self: null,
+    roomCode: null,
     players: new Map(),
     roundId: 0,
     state: 'connecting',
   };
+
+  function buildInviteUrl(roomCode) {
+    const u = new URL(window.location.href);
+    u.searchParams.set('code', roomCode);
+    u.hash = '';
+    return u.toString();
+  }
+
+  async function copyCurrentInviteLink() {
+    const code = game.roomCode;
+    if (!code || !ui.roomPill) return;
+    const url = buildInviteUrl(code);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(url);
+        showBanner('Invite link copied.', 2200);
+        return;
+      }
+    } catch {
+      // clipboard denied or unavailable
+    }
+    window.prompt('Copy invite link:', url);
+  }
 
   // Match client/renderer + server: crack threshold (for first-crack SFX only).
   const SFX_WALL_HP = 5;
@@ -160,6 +184,7 @@
     if (input === null) return;
     const trimmed = input.trim();
     game.self = null;
+    game.roomCode = null;
     window.Net.switchServer(trimmed || null);
     game.players = new Map();
     game.state = 'connecting';
@@ -194,6 +219,12 @@
       let v = ui.joinCode.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
       if (v.length > 6) v = v.slice(0, 6);
       ui.joinCode.value = v;
+    });
+  }
+
+  if (ui.roomPill) {
+    ui.roomPill.addEventListener('click', () => {
+      copyCurrentInviteLink();
     });
   }
 
@@ -233,6 +264,7 @@
     game.players = new Map(data.players.map((p) => [p.id, p]));
 
     hideSessionModal();
+    game.roomCode = data.roomCode || null;
     if (data.roomCode && ui.roomPill) {
       ui.roomPill.textContent = `Room ${data.roomCode}`;
       ui.roomPill.classList.remove('hidden');
