@@ -72,6 +72,15 @@
     state: 'connecting',
   };
 
+  // Match client/renderer + server: crack threshold (for first-crack SFX only).
+  const SFX_WALL_HP = 5;
+  const SFX_BULLET_DMG = 0.5;
+  const SFX_CRACK_HITS = 3;
+  function wallShowsCracks(hp) {
+    if (hp == null || hp <= 0 || hp === -1) return false;
+    return SFX_WALL_HP - hp + 1e-6 >= SFX_CRACK_HITS * SFX_BULLET_DMG;
+  }
+
   let bannerTimeout = null;
 
   function setStatus(text, extra) {
@@ -210,6 +219,19 @@
   });
 
   window.Net.on('bullet', (evt) => {
+    if (game.self && evt.shooterId === game.self.id) {
+      window.Synth.playShoot();
+    }
+    if (evt.hitKind === 'wall') {
+      window.Synth.playWallHit();
+      if (!evt.destroyed && evt.wallHpAfter != null) {
+        const hp = evt.wallHpAfter;
+        const prevHp = hp + SFX_BULLET_DMG;
+        if (wallShowsCracks(hp) && !wallShowsCracks(prevHp)) {
+          window.Synth.playCrack();
+        }
+      }
+    }
     window.Renderer.spawnBullet(evt);
   });
 
@@ -240,6 +262,7 @@
 
   window.Net.on('gameOver', ({ winner, resetInMs }) => {
     game.state = 'finished';
+    window.Synth.playWin();
     const isYou = winner && game.self && winner.id === game.self.id;
     const name = winner ? winner.name : 'Someone';
     const color = winner ? winner.color : '#fff';
