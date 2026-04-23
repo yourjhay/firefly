@@ -1,0 +1,10 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.cursor
+*.md
+.env
+.env.*
+fireflies_promo.png
+make_*.py
