@@ -10,6 +10,13 @@ const PLAYER_COLORS = [
 const MAX_PLAYERS_PER_ROOM = 13;
 
 const MOVE_COOLDOWN_MS = 70;
+/** Ghost grid step delay when no player is in line-of-sight (patrol). */
+const GHOST_MOVE_COOLDOWN_PATROL_MS = 400;
+/** Ghost grid step delay when at least one living player is visible (chase). */
+const GHOST_MOVE_COOLDOWN_CHASE_MS = 300;
+const GHOST_TICK_MS = 35;
+const GHOST_HP_MAX = 2;
+const GHOST_BULLET_DAMAGE = 1;
 const RESET_DELAY_MS = 5000;
 
 const WALL_HP_DEFAULT = 5;
@@ -40,6 +47,62 @@ const DIR_DELTAS = {
   right: [1, 0],
 };
 
+const DIR_ORDER = ['up', 'right', 'down', 'left'];
+
+function dirFromDelta(dx, dy) {
+  if (dy === -1) return 'up';
+  if (dy === 1) return 'down';
+  if (dx === -1) return 'left';
+  return 'right';
+}
+
+/** Axis-aligned clear line of sight on path cells (no walls strictly between). */
+function axisAlignedLos(grid, ax, ay, bx, by) {
+  if (grid[ay]?.[ax] === 1 || grid[by]?.[bx] === 1) return false;
+  if (ax === bx) {
+    if (ay === by) return true;
+    const y0 = Math.min(ay, by);
+    const y1 = Math.max(ay, by);
+    for (let y = y0 + 1; y < y1; y++) {
+      if (grid[y][ax] === 1) return false;
+    }
+    return true;
+  }
+  if (ay === by) {
+    const x0 = Math.min(ax, bx);
+    const x1 = Math.max(ax, bx);
+    for (let x = x0 + 1; x < x1; x++) {
+      if (grid[ay][x] === 1) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+/** BFS distances from (sx,sy) to all reachable path cells; unwalkable = -1. */
+function bfsDistances(grid, width, height, sx, sy) {
+  const dist = Array.from({ length: height }, () => Array(width).fill(-1));
+  if (grid[sy][sx] === 1) return dist;
+  const q = [[sx, sy]];
+  dist[sy][sx] = 0;
+  let qi = 0;
+  while (qi < q.length) {
+    const [x, y] = q[qi++];
+    const d = dist[y][x];
+    for (const dir of DIR_ORDER) {
+      const [dx, dy] = DIR_DELTAS[dir];
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+      if (grid[ny][nx] === 1) continue;
+      if (dist[ny][nx] !== -1) continue;
+      dist[ny][nx] = d + 1;
+      q.push([nx, ny]);
+    }
+  }
+  return dist;
+}
+
 class GameManager {
   // broadcast(msg, exceptId?) is the transport hook. Caller fans the JSON
   // payload out to every connected client (optionally skipping one).
@@ -53,6 +116,11 @@ class GameManager {
     this.colorIndex = 0;
     this.roundId = 0;
     this._resetTimer = null;
+    /** When true, next `reset()` sets round counter so `newMaze` yields round 1. */
+    this._resetAllEliminated = false;
+    this.ghosts = new Map();
+    this._ghostIdSeq = 0;
+    this._ghostTickTimer = setInterval(() => this._tickGhosts(), GHOST_TICK_MS);
     this.newMaze();
   }
 
@@ -63,6 +131,7 @@ class GameManager {
     this.winnerId = null;
     this.roundId += 1;
     for (const p of this.players.values()) {
+      p.eliminated = false;
       p.x = this.maze.start.x;
       p.y = this.maze.start.y;
       p.facing = 'right';
@@ -80,6 +149,11 @@ class GameManager {
         p._overheatTimer = null;
       }
     }
+    for (const gid of this.ghosts.keys()) {
+      this.ghosts.delete(gid);
+      this.broadcast({ type: 'ghostRemoved', id: gid });
+    }
+    this.syncGhosts();
   }
 
   // 2D array mirroring the maze grid. Path tiles have 0 HP (not applicable),
@@ -123,6 +197,107 @@ class GameManager {
     return c;
   }
 
+  _livingPlayerCount() {
+    let n = 0;
+    for (const p of this.players.values()) {
+      if (!p.eliminated) n += 1;
+    }
+    return n;
+  }
+
+  desiredGhostCount() {
+    return Math.ceil(this._livingPlayerCount() / 3);
+  }
+
+  _collectPathCells(excludeKeys) {
+    const { grid, width, height, start, goal } = this.maze;
+    const cells = [];
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (grid[y][x] !== 0) continue;
+        const k = `${x},${y}`;
+        if (excludeKeys.has(k)) continue;
+        if (x === start.x && y === start.y) continue;
+        if (x === goal.x && y === goal.y) continue;
+        cells.push([x, y]);
+      }
+    }
+    return cells;
+  }
+
+  _nextGhostId() {
+    const id = `g${this._ghostIdSeq}`;
+    this._ghostIdSeq += 1;
+    return id;
+  }
+
+  syncGhosts() {
+    const want = this.desiredGhostCount();
+    const exclude = new Set();
+
+    for (const p of this.players.values()) {
+      exclude.add(`${p.x},${p.y}`);
+    }
+    for (const g of this.ghosts.values()) {
+      exclude.add(`${g.x},${g.y}`);
+    }
+
+    while (this.ghosts.size > want) {
+      const ids = [...this.ghosts.keys()];
+      const rid = ids[ids.length - 1];
+      this.ghosts.delete(rid);
+      this.broadcast({ type: 'ghostRemoved', id: rid });
+    }
+
+    const pool = this._collectPathCells(exclude);
+    while (this.ghosts.size < want && pool.length > 0) {
+      const pick = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+      const [x, y] = pick;
+      exclude.add(`${x},${y}`);
+      const id = this._nextGhostId();
+      const ghost = {
+        id,
+        x,
+        y,
+        facing: 'right',
+        hp: GHOST_HP_MAX,
+        lastMoveAt: 0,
+        prevX: x,
+        prevY: y,
+      };
+      this.ghosts.set(id, ghost);
+      this.broadcast({ type: 'ghostSpawned', ghost: serializeGhost(ghost) });
+    }
+
+    // Fallback for tiny mazes: still must not overlap players or other ghosts.
+    while (this.ghosts.size < want) {
+      const ex = new Set();
+      for (const p of this.players.values()) {
+        ex.add(`${p.x},${p.y}`);
+      }
+      for (const g of this.ghosts.values()) {
+        ex.add(`${g.x},${g.y}`);
+      }
+      const wide = this._collectPathCells(ex);
+      if (!wide.length) break;
+      const [x, y] = wide[Math.floor(Math.random() * wide.length)];
+      ex.add(`${x},${y}`);
+      const id = this._nextGhostId();
+      const ghost = {
+        id,
+        x,
+        y,
+        facing: 'right',
+        hp: GHOST_HP_MAX,
+        lastMoveAt: 0,
+        prevX: x,
+        prevY: y,
+      };
+      this.ghosts.set(id, ghost);
+      this.broadcast({ type: 'ghostSpawned', ghost: serializeGhost(ghost) });
+    }
+  }
+
   addPlayer(id) {
     if (this.players.size >= MAX_PLAYERS_PER_ROOM) return null;
     const player = {
@@ -141,9 +316,11 @@ class GameManager {
       nextLockoutMs: OVERHEAT_LOCKOUT_MS_BASE,
       appliedLockoutMs: OVERHEAT_LOCKOUT_MS_BASE,
       depleted: false,
+      eliminated: false,
       _overheatTimer: null,
     };
     this.players.set(id, player);
+    this.syncGhosts();
     this.broadcast(
       {
         type: 'playerJoined',
@@ -161,6 +338,10 @@ class GameManager {
     // No one's left to play — wipe round history so the next player
     // starts fresh on Round 1 with a brand new maze.
     if (this.players.size === 0) {
+      if (this._ghostTickTimer) {
+        clearInterval(this._ghostTickTimer);
+        this._ghostTickTimer = null;
+      }
       if (this._resetTimer) {
         clearTimeout(this._resetTimer);
         this._resetTimer = null;
@@ -170,6 +351,9 @@ class GameManager {
       this.state = 'playing';
       this.winnerId = null;
       this.newMaze();
+      this._ghostTickTimer = setInterval(() => this._tickGhosts(), GHOST_TICK_MS);
+    } else {
+      this.syncGhosts();
     }
   }
 
@@ -188,13 +372,14 @@ class GameManager {
         lockoutStepMs: OVERHEAT_LOCKOUT_STEP_MS,
         serverTime: Date.now(),
       },
+      ghosts: Array.from(this.ghosts.values()).map(serializeGhost),
     };
   }
 
   move(id, dir) {
     if (this.state !== 'playing') return;
     const p = this.players.get(id);
-    if (!p) return;
+    if (!p || p.eliminated) return;
     const delta = DIR_DELTAS[dir];
     if (!delta) return;
 
@@ -219,6 +404,8 @@ class GameManager {
 
     this.broadcast({ type: 'playerMoved', id, x: nx, y: ny, facing: p.facing });
 
+    this._checkGhostPlayerCollision();
+
     if (nx === this.maze.goal.x && ny === this.maze.goal.y) {
       this.state = 'finished';
       this.winnerId = id;
@@ -236,7 +423,7 @@ class GameManager {
   fire(id) {
     if (this.state !== 'playing') return;
     const p = this.players.get(id);
-    if (!p) return;
+    if (!p || p.eliminated) return;
     const now = Date.now();
 
     // Out of opportunity for this round — nothing to do.
@@ -315,6 +502,28 @@ class GameManager {
         hitKind = 'border';
         break;
       }
+      const ghostHit = this._ghostAt(nx, ny);
+      if (ghostHit) {
+        ghostHit.hp -= GHOST_BULLET_DAMAGE;
+        hit = { x: nx, y: ny };
+        hitKind = 'ghost';
+        const dead = ghostHit.hp <= 0;
+        if (dead) this.ghosts.delete(ghostHit.id);
+        const bulletMsg = {
+          type: 'bullet',
+          shooterId: id,
+          color: p.color,
+          from: { x: p.x, y: p.y },
+          to: hit,
+          dir: p.facing,
+          hitKind: 'ghost',
+          ghostId: ghostHit.id,
+          ghostHpAfter: dead ? 0 : ghostHit.hp,
+          destroyed: dead,
+        };
+        this.broadcast(bulletMsg);
+        return;
+      }
       if (this.maze.grid[ny][nx] === 1) {
         hit = { x: nx, y: ny };
         const currentHp = this.wallHp[ny][nx];
@@ -358,6 +567,10 @@ class GameManager {
 
   reset() {
     this._resetTimer = null;
+    if (this._resetAllEliminated) {
+      this.roundId = 0;
+      this._resetAllEliminated = false;
+    }
     this.newMaze();
     this.broadcast({ type: 'newRound', ...this.snapshot() });
   }
@@ -386,6 +599,189 @@ class GameManager {
       serverTime: Date.now(),
     };
   }
+
+  _ghostAt(x, y) {
+    for (const g of this.ghosts.values()) {
+      if (g.x === x && g.y === y) return g;
+    }
+    return null;
+  }
+
+  _checkGhostPlayerCollision() {
+    const victims = new Set();
+    for (const g of this.ghosts.values()) {
+      for (const p of this.players.values()) {
+        if (p.eliminated) continue;
+        if (p.x === g.x && p.y === g.y) victims.add(p);
+      }
+    }
+    let any = false;
+    for (const p of victims) {
+      if (!p.eliminated) {
+        p.eliminated = true;
+        this.broadcast({ type: 'playerEliminated', id: p.id });
+        any = true;
+      }
+    }
+    if (any) this.syncGhosts();
+    this._maybeEndRoundAllEliminated();
+  }
+
+  _maybeEndRoundAllEliminated() {
+    if (this.state !== 'playing') return;
+    if (this.players.size === 0) return;
+    for (const p of this.players.values()) {
+      if (!p.eliminated) return;
+    }
+    this._resetAllEliminated = true;
+    this.state = 'finished';
+    this.winnerId = null;
+    this.broadcast({
+      type: 'gameOver',
+      winnerId: null,
+      winner: null,
+      reason: 'allEliminated',
+      resetInMs: RESET_DELAY_MS,
+    });
+    if (this._resetTimer) clearTimeout(this._resetTimer);
+    this._resetTimer = setTimeout(() => this.reset(), RESET_DELAY_MS);
+  }
+
+  _tickGhosts() {
+    if (this.state !== 'playing' || this.ghosts.size === 0) return;
+    this._checkGhostPlayerCollision();
+    if (this.state !== 'playing') return;
+    const now = Date.now();
+    const { grid, width, height } = this.maze;
+
+    // Snapshot so syncGhosts / collision never mutates the Map mid-iteration.
+    const ghostsList = [...this.ghosts.values()];
+
+    for (const g of ghostsList) {
+      if (!this.ghosts.has(g.id)) continue;
+
+      const targets = [];
+      for (const p of this.players.values()) {
+        if (p.eliminated) continue;
+        if (!axisAlignedLos(grid, g.x, g.y, p.x, p.y)) continue;
+        targets.push(p);
+      }
+
+      const chasing = targets.length > 0;
+      const moveCooldownMs = chasing
+        ? GHOST_MOVE_COOLDOWN_CHASE_MS
+        : GHOST_MOVE_COOLDOWN_PATROL_MS;
+      if (now - g.lastMoveAt < moveCooldownMs) continue;
+
+      let nx = g.x;
+      let ny = g.y;
+      let moved = false;
+
+      if (targets.length) {
+        const distFromGhost = bfsDistances(grid, width, height, g.x, g.y);
+        let best = null;
+        let bestD = Infinity;
+        for (const p of targets) {
+          const d = distFromGhost[p.y][p.x];
+          if (d < 0) continue;
+          if (d < bestD || (d === bestD && (!best || p.id < best.id))) {
+            bestD = d;
+            best = p;
+          }
+        }
+        if (best && bestD > 0) {
+          const distT = bfsDistances(grid, width, height, best.x, best.y);
+          const dHere = distT[g.y][g.x];
+          let pick = null;
+          let pickRank = Infinity;
+          if (dHere >= 0) {
+            let pickDirIdx = Infinity;
+            for (const dir of DIR_ORDER) {
+              const [dx, dy] = DIR_DELTAS[dir];
+              const tx = g.x + dx;
+              const ty = g.y + dy;
+              if (tx < 0 || tx >= width || ty < 0 || ty >= height) continue;
+              if (grid[ty][tx] === 1) continue;
+              const dn = distT[ty][tx];
+              if (dn < 0) continue;
+              const dirIdx = DIR_ORDER.indexOf(dir);
+              if (
+                dn < dHere &&
+                (pick == null || dn < pickRank || (dn === pickRank && dirIdx < pickDirIdx))
+              ) {
+                pickRank = dn;
+                pickDirIdx = dirIdx;
+                pick = { tx, ty, dir };
+              }
+            }
+          }
+          if (pick) {
+            nx = pick.tx;
+            ny = pick.ty;
+            g.facing = pick.dir;
+            moved = true;
+          }
+        }
+      }
+
+      if (!moved) {
+        const opts = [];
+        for (const dir of DIR_ORDER) {
+          const [dx, dy] = DIR_DELTAS[dir];
+          const tx = g.x + dx;
+          const ty = g.y + dy;
+          if (tx < 0 || tx >= width || ty < 0 || ty >= height) continue;
+          if (grid[ty][tx] === 1) continue;
+          if (tx === g.prevX && ty === g.prevY) continue;
+          opts.push({ tx, ty, dir });
+        }
+        if (!opts.length) {
+          for (const dir of DIR_ORDER) {
+            const [dx, dy] = DIR_DELTAS[dir];
+            const tx = g.x + dx;
+            const ty = g.y + dy;
+            if (tx < 0 || tx >= width || ty < 0 || ty >= height) continue;
+            if (grid[ty][tx] === 1) continue;
+            opts.push({ tx, ty, dir });
+          }
+        }
+        if (opts.length) {
+          const pick = opts[Math.floor(Math.random() * opts.length)];
+          nx = pick.tx;
+          ny = pick.ty;
+          g.facing = pick.dir;
+          moved = true;
+        }
+      }
+
+      g.lastMoveAt = now;
+      if (moved) {
+        g.prevX = g.x;
+        g.prevY = g.y;
+        g.x = nx;
+        g.y = ny;
+        this.broadcast({
+          type: 'ghostMoved',
+          id: g.id,
+          x: g.x,
+          y: g.y,
+          facing: g.facing,
+        });
+        this._checkGhostPlayerCollision();
+        if (this.state !== 'playing') return;
+      }
+    }
+  }
+}
+
+function serializeGhost(g) {
+  return {
+    id: g.id,
+    x: g.x,
+    y: g.y,
+    facing: g.facing || 'right',
+    hp: g.hp,
+  };
 }
 
 function serializePlayer(p) {
@@ -401,6 +797,7 @@ function serializePlayer(p) {
     nextBurstCapacityMs: p.nextBurstCapacityMs ?? BURST_CAPACITY_MS_BASE,
     nextLockoutMs: p.nextLockoutMs ?? OVERHEAT_LOCKOUT_MS_BASE,
     depleted: !!p.depleted,
+    eliminated: !!p.eliminated,
   };
 }
 

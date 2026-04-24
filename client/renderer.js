@@ -19,6 +19,12 @@
     mazeLayer: [],
     goal: null,
     playerEntities: new Map(),
+    ghostEntities: new Map(),
+    spectatorFullVision: false,
+    /** When true, camera is not pulled toward the local player each frame (spectator pan). */
+    spectatorSkipFollow: false,
+    spectatorPan: { active: false, lastX: 0, lastY: 0, pointerId: null },
+    spectatorPanListenersBound: false,
     playerBarrels: new Map(), // playerId -> barrel entity
     wallEntities: new Map(),  // "x,y" -> wall entity
     wallCrackEntities: new Map(), // "x,y" -> array of crack child entities
@@ -95,11 +101,16 @@
   }
 
   function teardown() {
+    unbindSpectatorMapPan();
     const el = document.getElementById('game');
     if (el) el.innerHTML = '';
     state.k = null;
     state.goal = null;
     state.playerEntities.clear();
+    state.ghostEntities.clear();
+    state.spectatorFullVision = false;
+    state.spectatorSkipFollow = false;
+    state.spectatorPan.active = false;
     state.playerBarrels.clear();
     state.wallEntities.clear();
     state.fogTiles.clear();
@@ -110,25 +121,31 @@
     state.mazeHeight = 0;
   }
 
-  function syncCameraFollow(snap) {
+  function clampCamWorldPos(x, y) {
     const k = state.k;
-    if (!k || !state.selfId) return;
-    const ent = state.playerEntities.get(state.selfId);
-    if (!ent) return;
-
     const viewW = k.width();
     const viewH = k.height();
     const W = state.mazeWidth * state.tileSize;
     const H = state.mazeHeight * state.tileSize;
     const halfW = viewW / 2;
     const halfH = viewH / 2;
-    let tx = ent.pos.x;
-    let ty = ent.pos.y;
+    let tx = x;
+    let ty = y;
     if (W <= viewW) tx = W / 2;
     else tx = Math.max(halfW, Math.min(W - halfW, tx));
     if (H <= viewH) ty = H / 2;
     else ty = Math.max(halfH, Math.min(H - halfH, ty));
-    const target = k.vec2(tx, ty);
+    return k.vec2(tx, ty);
+  }
+
+  function syncCameraFollow(snap) {
+    const k = state.k;
+    if (!k || !state.selfId) return;
+    if (state.spectatorSkipFollow) return;
+    const ent = state.playerEntities.get(state.selfId);
+    if (!ent) return;
+
+    const target = clampCamWorldPos(ent.pos.x, ent.pos.y);
     if (snap) {
       k.camPos(target);
     } else {
@@ -164,6 +181,12 @@
     k.onUpdate(() => {
       state.playerEntities.forEach((ent) => {
         if (ent.targetX == null) return;
+        ent.pos.x = lerp(ent.pos.x, ent.targetX, 0.3);
+        ent.pos.y = lerp(ent.pos.y, ent.targetY, 0.3);
+      });
+      state.ghostEntities.forEach((pack) => {
+        const ent = pack && pack.ent;
+        if (!ent || ent.targetX == null) return;
         ent.pos.x = lerp(ent.pos.x, ent.targetX, 0.3);
         ent.pos.y = lerp(ent.pos.y, ent.targetY, 0.3);
       });
@@ -549,6 +572,214 @@
     }
   }
 
+  function unbindSpectatorMapPan() {
+    const el = document.getElementById('game');
+    if (!el || !state.spectatorPanListenersBound) return;
+    state.spectatorPanListenersBound = false;
+    el.classList.remove('spectator-pan');
+    el.removeEventListener('pointerdown', onSpectatorPanDown);
+    el.removeEventListener('pointermove', onSpectatorPanMove, { passive: false });
+    el.removeEventListener('pointerup', onSpectatorPanUp);
+    el.removeEventListener('pointercancel', onSpectatorPanUp);
+  }
+
+  function onSpectatorPanDown(e) {
+    if (!state.spectatorFullVision || !state.spectatorSkipFollow) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    state.spectatorPan.active = true;
+    state.spectatorPan.pointerId = e.pointerId;
+    state.spectatorPan.lastX = e.clientX;
+    state.spectatorPan.lastY = e.clientY;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function onSpectatorPanMove(e) {
+    if (!state.spectatorPan.active || e.pointerId !== state.spectatorPan.pointerId) return;
+    e.preventDefault();
+    const k = state.k;
+    if (!k) return;
+    const el = document.getElementById('game');
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const rw = rect.width || 1;
+    const rh = rect.height || 1;
+    const sx = k.width() / rw;
+    const sy = k.height() / rh;
+    const dx = (e.clientX - state.spectatorPan.lastX) * sx;
+    const dy = (e.clientY - state.spectatorPan.lastY) * sy;
+    state.spectatorPan.lastX = e.clientX;
+    state.spectatorPan.lastY = e.clientY;
+    const p = k.camPos();
+    // Drag right → world moves right with pointer → camera center moves right
+    k.camPos(clampCamWorldPos(p.x + dx, p.y + dy));
+  }
+
+  function onSpectatorPanUp(e) {
+    if (!state.spectatorPan.active || e.pointerId !== state.spectatorPan.pointerId) return;
+    state.spectatorPan.active = false;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function bindSpectatorMapPan() {
+    const el = document.getElementById('game');
+    if (!el || state.spectatorPanListenersBound) return;
+    state.spectatorPanListenersBound = true;
+    el.classList.add('spectator-pan');
+    el.addEventListener('pointerdown', onSpectatorPanDown);
+    el.addEventListener('pointermove', onSpectatorPanMove, { passive: false });
+    el.addEventListener('pointerup', onSpectatorPanUp);
+    el.addEventListener('pointercancel', onSpectatorPanUp);
+  }
+
+  function setSpectatorFullVision(enabled) {
+    state.spectatorFullVision = !!enabled;
+    if (enabled) {
+      if (!state.k || !state.fogTiles.size) return;
+      state.fogTiles.forEach((fog) => {
+        fog.opacity = 0;
+      });
+      state.visible.clear();
+      bindSpectatorMapPan();
+    } else {
+      unbindSpectatorMapPan();
+    }
+  }
+
+  /** After fog + pan hooks, snap camera to the local player once then stop auto-follow. */
+  function enterSpectatorView() {
+    setSpectatorFullVision(true);
+    syncCameraFollow(true);
+    state.spectatorSkipFollow = true;
+  }
+
+  /** Call after renderAll when joining already eliminated (fog/pan already applied). */
+  function finalizeSpectatorCamera() {
+    state.spectatorSkipFollow = true;
+  }
+
+  function addGhost(g) {
+    const k = state.k;
+    if (!k) return;
+    if (state.ghostEntities.has(g.id)) {
+      updateGhostPosition(g.id, g.x, g.y, true, g.facing);
+      const pack = state.ghostEntities.get(g.id);
+      if (pack && pack.label && g.hp != null) pack.label.text = String(g.hp);
+      return;
+    }
+    const T = state.tileSize;
+    const px = g.x * T + T / 2;
+    const py = g.y * T + T / 2;
+    const r = 200;
+    const gb = 210;
+    const bb = 255;
+
+    const halo = k.add([
+      k.circle(T / 2 + 2),
+      k.pos(px, py),
+      k.anchor('center'),
+      k.color(r, gb, bb),
+      k.opacity(0.22),
+      k.z(8.5),
+      'ghostGlow',
+      { ghostId: g.id },
+    ]);
+
+    const ent = k.add([
+      k.circle(T / 2 - 2),
+      k.pos(px, py),
+      k.anchor('center'),
+      k.color(r, gb, bb),
+      k.opacity(0.72),
+      k.outline(2, k.rgb(255, 255, 255)),
+      k.z(9.5),
+      'ghostNpc',
+      {
+        ghostId: g.id,
+        targetX: px,
+        targetY: py,
+        facing: g.facing || 'down',
+      },
+    ]);
+
+    halo.onUpdate(() => {
+      halo.pos.x = ent.pos.x;
+      halo.pos.y = ent.pos.y;
+    });
+
+    const label = k.add([
+      k.text(String(g.hp != null ? g.hp : ''), { size: 9, font: 'sans-serif' }),
+      k.pos(px, py - T / 2 - 2),
+      k.anchor('bot'),
+      k.color(220, 226, 255),
+      k.z(11),
+      'ghostLabel',
+      { ghostId: g.id },
+    ]);
+    label.onUpdate(() => {
+      label.pos.x = ent.pos.x;
+      label.pos.y = ent.pos.y - T / 2 - 2;
+    });
+
+    state.ghostEntities.set(g.id, { ent, halo, label });
+  }
+
+  function removeGhost(id) {
+    const pack = state.ghostEntities.get(id);
+    if (pack) {
+      if (pack.halo) pack.halo.destroy();
+      if (pack.label) pack.label.destroy();
+      if (pack.ent) pack.ent.destroy();
+      state.ghostEntities.delete(id);
+    }
+    if (state.k) {
+      state.k
+        .get('ghostGlow')
+        .filter((e) => e.ghostId === id)
+        .forEach((e) => e.destroy());
+      state.k
+        .get('ghostLabel')
+        .filter((e) => e.ghostId === id)
+        .forEach((e) => e.destroy());
+      state.k
+        .get('ghostNpc')
+        .filter((e) => e.ghostId === id)
+        .forEach((e) => e.destroy());
+    }
+  }
+
+  function updateGhostPosition(id, x, y, snap = false, facing = null) {
+    const pack = state.ghostEntities.get(id);
+    if (!pack || !pack.ent) return;
+    const ent = pack.ent;
+    const T = state.tileSize;
+    ent.targetX = x * T + T / 2;
+    ent.targetY = y * T + T / 2;
+    if (facing) ent.facing = facing;
+    if (snap) {
+      ent.pos.x = ent.targetX;
+      ent.pos.y = ent.targetY;
+    }
+  }
+
+  function setGhostHp(ghostId, hpAfter, destroyed) {
+    if (destroyed) {
+      removeGhost(ghostId);
+      return;
+    }
+    const pack = state.ghostEntities.get(ghostId);
+    if (pack && pack.label) {
+      pack.label.text = String(hpAfter != null ? hpAfter : '');
+    }
+  }
+
   function updatePlayerPosition(id, x, y, snap = false, facing = null) {
     const ent = state.playerEntities.get(id);
     if (!ent) return;
@@ -562,7 +793,7 @@
       if (id === state.selfId) syncCameraFollow(true);
     }
     // Extend fog reveal whenever the self-player moves.
-    if (id === state.selfId) revealFrom(x, y);
+    if (id === state.selfId && !state.spectatorFullVision) revealFrom(x, y);
   }
 
   function setPlayerFacing(id, facing) {
@@ -664,7 +895,7 @@
       if (flash.age >= flash.life) flash.destroy();
     });
 
-    if (destroyed && gridPos) {
+    if (destroyed && gridPos && hitKind !== 'ghost') {
       const key = `${gridPos.x},${gridPos.y}`;
       removeWallCrackAt(key);
       const wall = state.wallEntities.get(key);
@@ -733,12 +964,23 @@
       state.k.get('bullet').forEach((b) => b.destroy());
       state.k.get('bulletFlash').forEach((b) => b.destroy());
       state.k.get('bulletDebris').forEach((b) => b.destroy());
+      state.k.get('ghostNpc').forEach((e) => e.destroy());
+      state.k.get('ghostGlow').forEach((e) => e.destroy());
+      state.k.get('ghostLabel').forEach((e) => e.destroy());
     }
+    state.ghostEntities.clear();
     data.players.forEach((p) => addPlayer(p));
+    (data.ghosts || []).forEach((g) => addGhost(g));
 
-    // Initial fog reveal around the self-player's spawn position.
-    const me = data.players.find((p) => p.id === state.selfId);
-    if (me) revealFrom(me.x, me.y);
+    state.spectatorFullVision = !!data.spectatorFullVision;
+    if (state.spectatorFullVision) {
+      setSpectatorFullVision(true);
+    } else {
+      setSpectatorFullVision(false);
+      state.spectatorSkipFollow = false;
+      const me = data.players.find((p) => p.id === state.selfId);
+      if (me) revealFrom(me.x, me.y);
+    }
     syncCameraFollow(true);
   }
 
@@ -748,6 +990,14 @@
     renderAll,
     addPlayer,
     removePlayer,
+    addGhost,
+    removeGhost,
+    updateGhostPosition,
+    setGhostHp,
+    setSpectatorFullVision,
+    enterSpectatorView,
+    finalizeSpectatorCamera,
+    syncCameraFollow,
     updatePlayerPosition,
     setPlayerFacing,
     setPlayerOverheated,
