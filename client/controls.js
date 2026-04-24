@@ -28,6 +28,7 @@
   function startRepeat() {
     if (repeatTimer) return;
     repeatTimer = setInterval(() => {
+      if (window.gameEliminated) return;
       const dir = currentDir();
       if (!dir) return;
       if (window.Net) window.Net.sendMove(dir);
@@ -44,6 +45,7 @@
 
   function press(dir) {
     if (!dir) return;
+    if (window.gameEliminated) return;
     lastDir = dir;
     if (!held.has(dir)) {
       held.add(dir);
@@ -64,6 +66,7 @@
   let fireTimer = null;
 
   function fireOnce() {
+    if (window.gameEliminated) return;
     if (window.Net) window.Net.sendFire();
   }
 

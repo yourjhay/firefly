@@ -105,6 +105,15 @@ body {
   image-rendering: pixelated;
 }
 
+#game.spectator-pan {
+  cursor: grab;
+  touch-action: none;
+}
+
+#game.spectator-pan:active {
+  cursor: grabbing;
+}
+
 #banner {
   position: absolute;
   top: 16px;

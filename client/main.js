@@ -8,6 +8,7 @@
     banner: document.getElementById('banner'),
     serverBtn: document.getElementById('serverBtn'),
     firePill: document.getElementById('firePill'),
+    spectatorPill: document.getElementById('spectatorPill'),
     roomPill: document.getElementById('roomPill'),
     sessionModal: document.getElementById('sessionModal'),
     sessionError: document.getElementById('sessionError'),
@@ -108,9 +109,23 @@
     self: null,
     roomCode: null,
     players: new Map(),
+    ghosts: new Map(),
     roundId: 0,
     state: 'connecting',
+    selfEliminated: false,
   };
+  window.gameEliminated = false;
+
+  function setSelfEliminated(elim) {
+    game.selfEliminated = !!elim;
+    window.gameEliminated = !!elim;
+    if (ui.spectatorPill) {
+      ui.spectatorPill.classList.toggle('hidden', !elim);
+      ui.spectatorPill.textContent = elim
+        ? 'Spectating — drag the map to look around'
+        : 'Spectating';
+    }
+  }
 
   function buildInviteUrl(roomCode) {
     const u = new URL(window.location.href);
@@ -171,7 +186,12 @@
     ui.playerCount.textContent = `Players: ${game.players.size}`;
     ui.roundLabel.textContent = `Round ${game.roundId}`;
     if (game.self) {
-      ui.playerInfo.innerHTML = `You: <span style="color:${game.self.color}">●</span> ${game.self.name}`;
+      const dot = `<span style="color:${game.self.color}">●</span>`;
+      if (game.selfEliminated) {
+        ui.playerInfo.innerHTML = `You: ${dot} ${game.self.name} <span class="muted">(out)</span>`;
+      } else {
+        ui.playerInfo.innerHTML = `You: ${dot} ${game.self.name}`;
+      }
     }
   }
 
@@ -187,6 +207,8 @@
     game.roomCode = null;
     window.Net.switchServer(trimmed || null);
     game.players = new Map();
+    game.ghosts = new Map();
+    setSelfEliminated(false);
     game.state = 'connecting';
     if (ui.roomPill) ui.roomPill.classList.add('hidden');
     hideBanner();
@@ -262,6 +284,9 @@
     game.roundId = data.roundId;
     game.state = data.state;
     game.players = new Map(data.players.map((p) => [p.id, p]));
+    game.ghosts = new Map((data.ghosts || []).map((g) => [g.id, g]));
+    const meInit = data.players.find((p) => p.id === game.self.id);
+    setSelfEliminated(meInit && meInit.eliminated);
 
     hideSessionModal();
     game.roomCode = data.roomCode || null;
@@ -282,8 +307,10 @@
     window.Renderer.renderAll({
       maze: data.maze,
       players: data.players,
+      ghosts: data.ghosts || [],
       wallHp: data.wallHp,
       roundId: data.roundId,
+      spectatorFullVision: game.selfEliminated,
     });
 
     // Apply any pre-existing fire state (e.g. mid-lockout/depleted reconnect).
@@ -309,11 +336,22 @@
     setStatus(data.state === 'finished' ? 'Round over' : 'Playing');
     updateHud();
 
-    if (data.state === 'finished' && data.winnerId) {
-      const winner = game.players.get(data.winnerId);
-      if (winner) {
+    if (game.selfEliminated) {
+      window.Renderer.finalizeSpectatorCamera();
+    }
+
+    if (data.state === 'finished') {
+      if (data.winnerId) {
+        const winner = game.players.get(data.winnerId);
+        if (winner) {
+          showBanner(
+            `<span class="accent">${winner.name}</span> wins! Next round starting…`,
+            0
+          );
+        }
+      } else {
         showBanner(
-          `<span class="accent">${winner.name}</span> wins! Next round starting…`,
+          '<span class="accent">Everyone was caught</span><br/><small style="font-weight:400;color:#9ba0b4">Round 1 starting soon…</small>',
           0
         );
       }
@@ -371,6 +409,19 @@
         }
       }
     }
+    if (evt.hitKind === 'ghost') {
+      if (evt.ghostId != null) {
+        if (evt.destroyed) game.ghosts.delete(evt.ghostId);
+        else {
+          const g = game.ghosts.get(evt.ghostId);
+          if (g && typeof evt.ghostHpAfter === 'number') g.hp = evt.ghostHpAfter;
+        }
+        if (game.self) {
+          window.Renderer.setGhostHp(evt.ghostId, evt.ghostHpAfter, evt.destroyed);
+        }
+      }
+      if (!evt.destroyed) window.Synth.playWallHit();
+    }
     if (!game.self) return;
     window.Renderer.spawnBullet(evt);
   });
@@ -400,17 +451,26 @@
     }
   });
 
-  window.Net.on('gameOver', ({ winner, resetInMs }) => {
+  window.Net.on('gameOver', (data) => {
     if (!game.self) return;
     game.state = 'finished';
+    const resetInMs = data && data.resetInMs;
+    const secs = Math.round((resetInMs || 5000) / 1000);
+    if (!data || !data.winnerId) {
+      showBanner(
+        `<span class="accent">Everyone was caught</span><br/><small style="font-weight:400;color:#9ba0b4">Round 1 in ${secs}s…</small>`,
+        0
+      );
+      setStatus('Round over');
+      return;
+    }
     window.Synth.playWin();
+    const winner = data.winner;
     const isYou = winner && game.self && winner.id === game.self.id;
     const name = winner ? winner.name : 'Someone';
     const color = winner ? winner.color : '#fff';
     showBanner(
-      `${isYou ? 'You win!' : `<span style="color:${color}">●</span> <span class="accent">${name}</span> wins!`}<br/><small style="font-weight:400;color:#9ba0b4">New round in ${Math.round(
-        (resetInMs || 5000) / 1000
-      )}s…</small>`,
+      `${isYou ? 'You win!' : `<span style="color:${color}">●</span> <span class="accent">${name}</span> wins!`}<br/><small style="font-weight:400;color:#9ba0b4">New round in ${secs}s…</small>`,
       0
     );
     setStatus('Round over');
@@ -421,6 +481,8 @@
     game.state = data.state;
     game.roundId = data.roundId;
     game.players = new Map(data.players.map((p) => [p.id, p]));
+    game.ghosts = new Map((data.ghosts || []).map((g) => [g.id, g]));
+    setSelfEliminated(false);
     if (data.fire) {
       fire.serverOffsetMs = (data.fire.serverTime || 0) - Date.now();
       fire.lockoutMs = data.fire.lockoutBaseMs || fire.lockoutMs;
@@ -435,12 +497,48 @@
     window.Renderer.renderAll({
       maze: data.maze,
       players: data.players,
+      ghosts: data.ghosts || [],
       wallHp: data.wallHp,
       roundId: data.roundId,
+      spectatorFullVision: false,
     });
     hideBanner();
     setStatus('Playing');
     updateHud();
+  });
+
+  window.Net.on('ghostMoved', (evt) => {
+    if (!game.self || !evt) return;
+    const g = game.ghosts.get(evt.id);
+    if (g) {
+      g.x = evt.x;
+      g.y = evt.y;
+      if (evt.facing) g.facing = evt.facing;
+    }
+    window.Renderer.updateGhostPosition(evt.id, evt.x, evt.y, false, evt.facing);
+  });
+
+  window.Net.on('ghostSpawned', ({ ghost }) => {
+    if (!game.self || !ghost) return;
+    game.ghosts.set(ghost.id, ghost);
+    window.Renderer.addGhost(ghost);
+  });
+
+  window.Net.on('ghostRemoved', ({ id }) => {
+    if (!game.self) return;
+    game.ghosts.delete(id);
+    window.Renderer.removeGhost(id);
+  });
+
+  window.Net.on('playerEliminated', ({ id }) => {
+    if (!game.self) return;
+    const p = game.players.get(id);
+    if (p) p.eliminated = true;
+    if (id === game.self.id) {
+      setSelfEliminated(true);
+      window.Renderer.enterSpectatorView();
+      updateHud();
+    }
   });
 
   const params = new URLSearchParams(window.location.search);
