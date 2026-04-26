@@ -105,8 +105,8 @@ All messages are JSON objects with a `type` field.
 
 After the WebSocket opens, the client must send exactly one of:
 
-- `{ "type": "createSession" }` — create a new room; you become the first player.
-- `{ "type": "joinSession", "code": "FL1234" }` — join an existing room (`code` normalized server-side).
+- `{ "type": "createSession", "name": "R2D2" }` — create a new room; you become the first player (`name` optional).
+- `{ "type": "joinSession", "code": "FL1234", "name": "R2D2" }` — join an existing room (`code` normalized server-side, `name` optional).
 
 Until one of these succeeds, the server will not send `init`. Unknown or malformed join codes receive `sessionError` (see below).
 
@@ -133,11 +133,13 @@ Until one of these succeeds, the server will not send `init`. Unknown or malform
 
 | `type`           | Fields        | Notes                                        |
 | ---------------- | ------------- | -------------------------------------------- |
-| `createSession`  | _(none)_      | Create a private room; server assigns `code` |
-| `joinSession`    | `code` string | Join room `FL1234` style code               |
+| `createSession`  | `name` string _(optional)_ | Create a private room; server assigns `code` |
+| `joinSession`    | `code` string, `name` string _(optional)_ | Join room `FL1234` style code               |
 | `move`           | `dir`         | `"up" \| "down" \| "left" \| "right"` (only after `init`) |
 | `fire`           | _(none)_      | Fire a bullet in the player’s current facing |
 | `ping`           | `t` (number)  | Optional; echoed back in `pong` for latency  |
+
+For `name`, the server keeps only letters and digits (`A-Z`, `a-z`, `0-9`) and limits to 6 characters. If empty/invalid after sanitizing, it falls back to the generated default.
 
 Movement is grid-based, one tile at a time. The server enforces a per-player ~70 ms cooldown so held inputs do not flood.
 

@@ -5,7 +5,7 @@ const path = require('path');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { SessionManager } = require('./sessionManager');
-const { MAX_PLAYERS_PER_ROOM } = require('./gameManager');
+const { MAX_PLAYERS_PER_ROOM, sanitizePlayerName } = require('./gameManager');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const COLS = parseInt(process.env.MAZE_COLS || '16', 10);
@@ -94,7 +94,8 @@ wss.on('connection', (ws, req) => {
         }
         const { code, game } = sessionManager.createSession();
         attachSession(ws, code, playerId, game);
-        const player = game.addPlayer(playerId);
+        const requestedName = sanitizePlayerName(msg.name);
+        const player = game.addPlayer(playerId, requestedName);
         game.hostId = playerId;
         console.log(`[+] ${player.name} hosted ${code} (${game.players.size} in room)`);
         sendInit(ws, code, player, game);
@@ -121,7 +122,8 @@ wss.on('connection', (ws, req) => {
           return;
         }
         attachSession(ws, normalized, playerId, game);
-        const player = game.addPlayer(playerId);
+        const requestedName = sanitizePlayerName(msg.name);
+        const player = game.addPlayer(playerId, requestedName);
         if (!player) {
           detachSession(ws);
           send(ws, { type: 'sessionError', code: 'ROOM_FULL' });

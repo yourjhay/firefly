@@ -7,8 +7,17 @@
 //   2. localStorage "maze.serverUrl"
 //   3. same-origin ws(s)://<host>/ws     (default)
 (function () {
+  const PLAYER_NAME_MAX_LEN = 6;
   const STORAGE_KEY = 'maze.serverUrl';
   const listeners = {};
+
+  function sanitizeDisplayName(raw) {
+    if (typeof raw !== 'string') return null;
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const compact = trimmed.replace(/[^A-Za-z0-9]/g, '').slice(0, PLAYER_NAME_MAX_LEN);
+    return compact || null;
+  }
 
   function on(event, cb) {
     (listeners[event] = listeners[event] || []).push(cb);
@@ -47,6 +56,7 @@
   let reconnectAttempts = 0;
   let reconnectTimer = null;
   let currentUrl = null;
+  let preferredDisplayName = null;
   /** @type {null | 'create' | { type: 'join', code: string }} */
   let pendingIntent = null;
   let resumeRoomCode = null;
@@ -59,6 +69,15 @@
 
   function setResumeRoomCode(code) {
     resumeRoomCode = code || null;
+  }
+
+  function setPreferredDisplayName(name) {
+    preferredDisplayName = sanitizeDisplayName(name);
+  }
+
+  function withPreferredName(msg) {
+    if (!preferredDisplayName) return msg;
+    return { ...msg, name: preferredDisplayName };
   }
 
   function scheduleReconnect() {
@@ -74,17 +93,21 @@
   function tryHandshake() {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (pendingIntent === 'create') {
-      ws.send(JSON.stringify({ type: 'createSession' }));
+      ws.send(JSON.stringify(withPreferredName({ type: 'createSession' })));
       pendingIntent = null;
       return;
     }
     if (pendingIntent && pendingIntent.type === 'join') {
-      ws.send(JSON.stringify({ type: 'joinSession', code: pendingIntent.code }));
+      ws.send(
+        JSON.stringify(
+          withPreferredName({ type: 'joinSession', code: pendingIntent.code })
+        )
+      );
       pendingIntent = null;
       return;
     }
     if (resumeRoomCode) {
-      ws.send(JSON.stringify({ type: 'joinSession', code: resumeRoomCode }));
+      ws.send(JSON.stringify(withPreferredName({ type: 'joinSession', code: resumeRoomCode })));
     }
   }
 
@@ -168,7 +191,8 @@
     ws.send(JSON.stringify({ type: 'resetMatch' }));
   }
 
-  function beginCreateSession() {
+  function beginCreateSession(displayName) {
+    setPreferredDisplayName(displayName);
     pendingIntent = 'create';
     suppressReconnect = false;
     if (reconnectTimer) {
@@ -185,7 +209,8 @@
     connect(currentUrl || resolveServerUrl());
   }
 
-  function beginJoinSession(code) {
+  function beginJoinSession(code, displayName) {
+    setPreferredDisplayName(displayName);
     pendingIntent = { type: 'join', code };
     suppressReconnect = false;
     if (reconnectTimer) {

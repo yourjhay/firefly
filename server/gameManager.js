@@ -11,6 +11,15 @@ const MAX_PLAYERS_PER_ROOM = 13;
 
 const MATCH_ROUNDS_MIN = 1;
 const MATCH_ROUNDS_MAX = 50;
+const PLAYER_NAME_MAX_LEN = 6;
+
+function sanitizePlayerName(raw) {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const compact = trimmed.replace(/[^A-Za-z0-9]/g, '').slice(0, PLAYER_NAME_MAX_LEN);
+  return compact || null;
+}
 
 /** Points awarded to the first player to reach the goal in one match round. */
 function pointsPerRound(totalRounds) {
@@ -336,11 +345,12 @@ class GameManager {
     }
   }
 
-  addPlayer(id) {
+  addPlayer(id, requestedName) {
     if (this.players.size >= MAX_PLAYERS_PER_ROOM) return null;
+    const defaultName = id.slice(0, 4).toUpperCase();
     const player = {
       id,
-      name: id.slice(0, 4).toUpperCase(),
+      name: sanitizePlayerName(requestedName) || defaultName,
       color: this.nextColor(),
       x: this.maze.start.x,
       y: this.maze.start.y,
@@ -983,4 +993,6 @@ module.exports = {
   MAX_PLAYERS_PER_ROOM,
   MATCH_ROUNDS_MIN,
   MATCH_ROUNDS_MAX,
+  PLAYER_NAME_MAX_LEN,
+  sanitizePlayerName,
 };
