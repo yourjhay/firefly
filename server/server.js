@@ -95,6 +95,7 @@ wss.on('connection', (ws, req) => {
         const { code, game } = sessionManager.createSession();
         attachSession(ws, code, playerId, game);
         const player = game.addPlayer(playerId);
+        game.hostId = playerId;
         console.log(`[+] ${player.name} hosted ${code} (${game.players.size} in room)`);
         sendInit(ws, code, player, game);
         break;
@@ -146,6 +147,47 @@ wss.on('connection', (ws, req) => {
         }
         ws.game.fire(playerId);
         break;
+      case 'setMatchSettings': {
+        if (!ws.sessionCode || !ws.game) {
+          send(ws, { type: 'sessionError', code: 'NOT_IN_SESSION' });
+          return;
+        }
+        if (ws.game.hostId !== playerId) {
+          send(ws, { type: 'sessionError', code: 'NOT_HOST' });
+          return;
+        }
+        ws.game.applyMatchSettings(playerId, {
+          ghostsEnabled: msg.ghostsEnabled,
+          totalRounds: msg.totalRounds,
+        });
+        break;
+      }
+      case 'startMatch': {
+        if (!ws.sessionCode || !ws.game) {
+          send(ws, { type: 'sessionError', code: 'NOT_IN_SESSION' });
+          return;
+        }
+        if (ws.game.hostId !== playerId) {
+          send(ws, { type: 'sessionError', code: 'NOT_HOST' });
+          return;
+        }
+        const ok = ws.game.startMatch(playerId);
+        if (!ok) send(ws, { type: 'sessionError', code: 'START_REJECTED' });
+        break;
+      }
+      case 'resetMatch': {
+        if (!ws.sessionCode || !ws.game) {
+          send(ws, { type: 'sessionError', code: 'NOT_IN_SESSION' });
+          return;
+        }
+        if (ws.game.hostId !== playerId) {
+          send(ws, { type: 'sessionError', code: 'NOT_HOST' });
+          return;
+        }
+        const okReset = ws.game.resetMatch(playerId);
+        if (!okReset) send(ws, { type: 'sessionError', code: 'RESET_REJECTED' });
+        break;
+      }
       case 'ping':
         send(ws, { type: 'pong', t: msg.t });
         break;

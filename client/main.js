@@ -13,7 +13,53 @@
     sessionModal: document.getElementById('sessionModal'),
     sessionError: document.getElementById('sessionError'),
     joinCode: document.getElementById('joinCode'),
+    leaderboardList: document.getElementById('leaderboardList'),
+    hostPanel: document.getElementById('hostPanel'),
+    ghostToggle: document.getElementById('ghostToggle'),
+    roundsInput: document.getElementById('roundsInput'),
+    startMatchBtn: document.getElementById('startMatchBtn'),
+    resetMatchBtn: document.getElementById('resetMatchBtn'),
+    lobbyWait: document.getElementById('lobbyWait'),
+    gameMount: document.getElementById('game'),
+    displayOptions: document.getElementById('displayOptions'),
+    fxGlowToggle: document.getElementById('fxGlowToggle'),
+    fxTrailToggle: document.getElementById('fxTrailToggle'),
   };
+
+  const LS_FX_GLOW = 'maze.fxGlow';
+  const LS_FX_TRAIL = 'maze.fxTrail';
+
+  function readFxBool(key) {
+    try {
+      return localStorage.getItem(key) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  function writeFxBool(key, v) {
+    try {
+      localStorage.setItem(key, v ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function applyFxFromStorage() {
+    const g = readFxBool(LS_FX_GLOW);
+    const t = readFxBool(LS_FX_TRAIL);
+    if (ui.fxGlowToggle) ui.fxGlowToggle.checked = g;
+    if (ui.fxTrailToggle) ui.fxTrailToggle.checked = t;
+    if (window.Renderer && window.Renderer.setFxOptions) {
+      window.Renderer.setFxOptions({ glow: g, trail: t });
+    }
+  }
+
+  function updateDisplayOptions() {
+    if (ui.displayOptions) {
+      ui.displayOptions.classList.toggle('hidden', !game.self);
+    }
+  }
 
   const hostBtn = document.getElementById('hostBtn');
   const joinBtn = document.getElementById('joinBtn');
@@ -93,7 +139,8 @@
     if (fireBtn) {
       fireBtn.classList.toggle('overheated', fire.overheated && !fire.depleted);
       fireBtn.classList.toggle('depleted', fire.depleted);
-      fireBtn.disabled = fire.depleted;
+      fireBtn.disabled =
+        fire.depleted || game.matchPhase !== 'playing';
     }
     if (firePillTimer) {
       clearInterval(firePillTimer);
@@ -113,8 +160,122 @@
     roundId: 0,
     state: 'connecting',
     selfEliminated: false,
+    hostId: null,
+    matchPhase: 'lobby',
+    totalRounds: 5,
+    matchRound: 0,
+    ghostsEnabled: true,
+    scores: {},
+    pointsPerRound: 20,
   };
   window.gameEliminated = false;
+  window.matchPhase = undefined;
+
+  function applyMatchFromSnapshot(data) {
+    if (!data) return;
+    if (data.hostId !== undefined && data.hostId !== null) {
+      game.hostId = data.hostId;
+    }
+    if (data.matchPhase) game.matchPhase = data.matchPhase;
+    if (data.totalRounds != null) game.totalRounds = data.totalRounds;
+    if (data.matchRound != null) game.matchRound = data.matchRound;
+    if (data.ghostsEnabled !== undefined) game.ghostsEnabled = data.ghostsEnabled;
+    if (data.scores && typeof data.scores === 'object') {
+      game.scores = { ...data.scores };
+    }
+    if (data.pointsPerRound != null) game.pointsPerRound = data.pointsPerRound;
+    window.matchPhase = game.matchPhase;
+    if (ui.gameMount) {
+      ui.gameMount.classList.toggle('lobby-dim', game.matchPhase === 'lobby');
+    }
+  }
+
+  function scoreForPlayer(id) {
+    if (game.scores && Object.prototype.hasOwnProperty.call(game.scores, id)) {
+      return game.scores[id];
+    }
+    const p = game.players.get(id);
+    return p && typeof p.score === 'number' ? p.score : 0;
+  }
+
+  function updateLeaderboard() {
+    if (!ui.leaderboardList) return;
+    const rows = [];
+    for (const p of game.players.values()) {
+      rows.push({
+        id: p.id,
+        name: p.name,
+        color: p.color,
+        score: scoreForPlayer(p.id),
+      });
+    }
+    rows.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    ui.leaderboardList.innerHTML = rows
+      .map(
+        (r) =>
+          `<li><span class="lb-name" style="color:${r.color}">${escapeHtml(
+            r.name
+          )}</span><span class="lb-score">${formatScore(r.score)}</span></li>`
+      )
+      .join('');
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function formatScore(n) {
+    const x = Number(n) || 0;
+    return Number.isInteger(x) ? String(x) : x.toFixed(2);
+  }
+
+  function updateHostPanel() {
+    const isHost = game.self && game.hostId === game.self.id;
+    const lobby = game.matchPhase === 'lobby';
+    const over = game.matchPhase === 'matchOver';
+
+    if (ui.hostPanel) {
+      ui.hostPanel.classList.toggle('hidden', !isHost || (!lobby && !over));
+    }
+    if (ui.lobbyWait) {
+      if (!game.self || isHost) {
+        ui.lobbyWait.classList.add('hidden');
+      } else if (lobby) {
+        ui.lobbyWait.textContent = 'Waiting for host to start…';
+        ui.lobbyWait.classList.remove('hidden');
+      } else if (game.matchPhase === 'playing') {
+        ui.lobbyWait.textContent = 'Round Started.';
+        ui.lobbyWait.classList.remove('hidden');
+      } else if (over) {
+        ui.lobbyWait.textContent = 'Waiting for host to reset to lobby…';
+        ui.lobbyWait.classList.remove('hidden');
+      } else {
+        ui.lobbyWait.classList.add('hidden');
+      }
+    }
+    if (ui.ghostToggle) {
+      ui.ghostToggle.disabled = !isHost || (!lobby && !over);
+      ui.ghostToggle.checked = !!game.ghostsEnabled;
+    }
+    if (ui.roundsInput) {
+      ui.roundsInput.disabled = !isHost || (!lobby && !over);
+      ui.roundsInput.value = String(game.totalRounds);
+    }
+    if (ui.startMatchBtn) {
+      ui.startMatchBtn.classList.toggle('hidden', !isHost || !lobby);
+    }
+    if (ui.resetMatchBtn) {
+      ui.resetMatchBtn.classList.toggle('hidden', !isHost || !over);
+    }
+    if (fireBtn) {
+      fireBtn.disabled =
+        !!fire.depleted || game.matchPhase !== 'playing';
+    }
+  }
 
   function setSelfEliminated(elim) {
     game.selfEliminated = !!elim;
@@ -184,7 +345,15 @@
 
   function updateHud() {
     ui.playerCount.textContent = `Players: ${game.players.size}`;
-    ui.roundLabel.textContent = `Round ${game.roundId}`;
+    if (game.matchPhase === 'playing') {
+      ui.roundLabel.textContent = `Round ${game.matchRound} / ${game.totalRounds}`;
+    } else if (game.matchPhase === 'lobby') {
+      ui.roundLabel.textContent = 'Lobby';
+    } else if (game.matchPhase === 'matchOver') {
+      ui.roundLabel.textContent = 'Match over';
+    } else {
+      ui.roundLabel.textContent = `Round ${game.roundId}`;
+    }
     if (game.self) {
       const dot = `<span style="color:${game.self.color}">●</span>`;
       if (game.selfEliminated) {
@@ -193,6 +362,7 @@
         ui.playerInfo.innerHTML = `You: ${dot} ${game.self.name}`;
       }
     }
+    updateDisplayOptions();
   }
 
   ui.serverBtn.addEventListener('click', () => {
@@ -208,11 +378,20 @@
     window.Net.switchServer(trimmed || null);
     game.players = new Map();
     game.ghosts = new Map();
+    game.hostId = null;
+    game.matchPhase = undefined;
+    game.scores = {};
+    window.matchPhase = undefined;
     setSelfEliminated(false);
     game.state = 'connecting';
     if (ui.roomPill) ui.roomPill.classList.add('hidden');
     hideBanner();
     window.Renderer.teardown();
+    if (ui.leaderboardList) ui.leaderboardList.innerHTML = '';
+    if (ui.hostPanel) ui.hostPanel.classList.add('hidden');
+    if (ui.lobbyWait) ui.lobbyWait.classList.add('hidden');
+    if (ui.displayOptions) ui.displayOptions.classList.add('hidden');
+    if (ui.gameMount) ui.gameMount.classList.remove('lobby-dim');
     setStatus('Lobby');
     showSessionModal();
   });
@@ -274,8 +453,17 @@
       ALREADY_IN_SESSION: 'Already in a session. Refresh the page to start over.',
       NOT_IN_SESSION: 'Not in a room yet.',
       ROOM_FULL: 'That room already has 13 players.',
+      NOT_HOST: 'Only the host can do that.',
+      START_REJECTED: 'Could not start the match (try again from the lobby).',
+      RESET_REJECTED: 'Could not reset the match.',
     };
-    setSessionErrorMsg(map[reason] || `Could not join (${reason || 'error'}).`);
+    const msgText = map[reason] || `Could not join (${reason || 'error'}).`;
+    const quietInRoom = ['NOT_HOST', 'START_REJECTED', 'RESET_REJECTED'];
+    if (game.self && quietInRoom.includes(reason)) {
+      showBanner(msgText, 2800);
+      return;
+    }
+    setSessionErrorMsg(msgText);
     showSessionModal();
   });
 
@@ -285,6 +473,7 @@
     game.state = data.state;
     game.players = new Map(data.players.map((p) => [p.id, p]));
     game.ghosts = new Map((data.ghosts || []).map((g) => [g.id, g]));
+    applyMatchFromSnapshot(data);
     const meInit = data.players.find((p) => p.id === game.self.id);
     setSelfEliminated(meInit && meInit.eliminated);
 
@@ -304,6 +493,7 @@
     }
 
     window.Renderer.init(game.self.id);
+    applyFxFromStorage();
     window.Renderer.renderAll({
       maze: data.maze,
       players: data.players,
@@ -333,25 +523,35 @@
     });
     applyFireUi();
 
-    setStatus(data.state === 'finished' ? 'Round over' : 'Playing');
+    if (game.matchPhase === 'playing') {
+      setStatus(data.state === 'finished' ? 'Round over' : 'Playing');
+    } else if (game.matchPhase === 'lobby') {
+      setStatus('Lobby');
+    } else {
+      setStatus('Match over');
+    }
     updateHud();
+    updateLeaderboard();
+    updateHostPanel();
 
     if (game.selfEliminated) {
       window.Renderer.finalizeSpectatorCamera();
     }
 
-    if (data.state === 'finished') {
+    if (data.state === 'finished' && game.matchPhase === 'playing') {
       if (data.winnerId) {
         const winner = game.players.get(data.winnerId);
         if (winner) {
           showBanner(
-            `<span class="accent">${winner.name}</span> wins! Next round starting…`,
+            `<span class="accent">${escapeHtml(
+              winner.name
+            )}</span> wins! Next round starting…`,
             0
           );
         }
       } else {
         showBanner(
-          '<span class="accent">Everyone was caught</span><br/><small style="font-weight:400;color:#9ba0b4">Round 1 starting soon…</small>',
+          '<span class="accent">Everyone was caught</span><br/><small style="font-weight:400;color:#9ba0b4">Next round starting soon…</small>',
           0
         );
       }
@@ -363,18 +563,26 @@
   window.Net.on('playerJoined', ({ player }) => {
     if (!game.self || !player) return;
     game.players.set(player.id, player);
+    if (typeof player.score === 'number') {
+      game.scores[player.id] = player.score;
+    }
     window.Renderer.addPlayer(player);
     if (player.overheated || player.depleted) {
       window.Renderer.setPlayerOverheated(player.id, true);
     }
     updateHud();
+    updateLeaderboard();
+    updateHostPanel();
   });
 
   window.Net.on('playerLeft', ({ id }) => {
     if (!game.self) return;
     game.players.delete(id);
+    delete game.scores[id];
     window.Renderer.removePlayer(id);
     updateHud();
+    updateLeaderboard();
+    updateHostPanel();
   });
 
   window.Net.on('playerMoved', ({ id, x, y, facing }) => {
@@ -454,11 +662,22 @@
   window.Net.on('gameOver', (data) => {
     if (!game.self) return;
     game.state = 'finished';
+    if (data && data.scores && typeof data.scores === 'object') {
+      game.scores = { ...data.scores };
+    }
+    updateLeaderboard();
+    updateHostPanel();
     const resetInMs = data && data.resetInMs;
     const secs = Math.round((resetInMs || 5000) / 1000);
+    const last = !!(data && data.isLastMatchRound);
+    const nextLine = last
+      ? `Match complete — final results in ${secs}s…`
+      : `Next round in ${secs}s…`;
     if (!data || !data.winnerId) {
       showBanner(
-        `<span class="accent">Everyone was caught</span><br/><small style="font-weight:400;color:#9ba0b4">Round 1 in ${secs}s…</small>`,
+        `<span class="accent">Everyone was caught</span><br/><small style="font-weight:400;color:#9ba0b4">${escapeHtml(
+          nextLine
+        )}</small>`,
         0
       );
       setStatus('Round over');
@@ -470,7 +689,11 @@
     const name = winner ? winner.name : 'Someone';
     const color = winner ? winner.color : '#fff';
     showBanner(
-      `${isYou ? 'You win!' : `<span style="color:${color}">●</span> <span class="accent">${name}</span> wins!`}<br/><small style="font-weight:400;color:#9ba0b4">New round in ${secs}s…</small>`,
+      `${isYou ? 'You win!' : `<span style="color:${color}">●</span> <span class="accent">${escapeHtml(
+        name
+      )}</span> wins!`}<br/><small style="font-weight:400;color:#9ba0b4">${escapeHtml(
+        nextLine
+      )}</small>`,
       0
     );
     setStatus('Round over');
@@ -482,6 +705,7 @@
     game.roundId = data.roundId;
     game.players = new Map(data.players.map((p) => [p.id, p]));
     game.ghosts = new Map((data.ghosts || []).map((g) => [g.id, g]));
+    applyMatchFromSnapshot(data);
     setSelfEliminated(false);
     if (data.fire) {
       fire.serverOffsetMs = (data.fire.serverTime || 0) - Date.now();
@@ -503,8 +727,81 @@
       spectatorFullVision: false,
     });
     hideBanner();
-    setStatus('Playing');
+    if (game.matchPhase === 'playing') {
+      setStatus('Playing');
+    } else if (game.matchPhase === 'lobby') {
+      setStatus('Lobby');
+    } else {
+      setStatus('Match over');
+    }
     updateHud();
+    updateLeaderboard();
+    updateHostPanel();
+  });
+
+  window.Net.on('matchOver', (data) => {
+    if (!game.self) return;
+    applyMatchFromSnapshot(data);
+    game.state = data.state || 'finished';
+    if (data.players) {
+      game.players = new Map(data.players.map((p) => [p.id, p]));
+    }
+    const ghostList = data.ghosts || [];
+    game.ghosts = new Map(ghostList.map((g) => [g.id, g]));
+    if (data.maze) {
+      window.Renderer.renderAll({
+        maze: data.maze,
+        players: data.players || [],
+        ghosts: ghostList,
+        wallHp: data.wallHp,
+        roundId: data.roundId,
+        spectatorFullVision: game.selfEliminated,
+      });
+    }
+    updateLeaderboard();
+    updateHostPanel();
+    const rows = (data.standings || [])
+      .map(
+        (r) =>
+          `<div><span style="color:${r.color}">${escapeHtml(
+            r.name
+          )}</span> <span style="color:#fff">${formatScore(r.score)}</span></div>`
+      )
+      .join('');
+    showBanner(
+      `<span class="accent">Match over</span><br/><small style="font-weight:400;color:#9ba0b4;display:block;margin-top:8px;text-align:left">${rows}</small><br/><small style="font-weight:400;color:#9ba0b4">${
+        game.hostId === game.self.id
+          ? 'Reset to lobby when ready (host panel).'
+          : 'Waiting for host to reset…'
+      }</small>`,
+      0
+    );
+    setStatus('Match over');
+  });
+
+  window.Net.on('matchSettings', (data) => {
+    if (!game.self) return;
+    applyMatchFromSnapshot(data);
+    if (data.maze && data.players) {
+      game.players = new Map(data.players.map((p) => [p.id, p]));
+      game.ghosts = new Map((data.ghosts || []).map((g) => [g.id, g]));
+      window.Renderer.renderAll({
+        maze: data.maze,
+        players: data.players,
+        ghosts: data.ghosts || [],
+        wallHp: data.wallHp,
+        roundId: data.roundId,
+        spectatorFullVision: game.selfEliminated,
+      });
+    }
+    updateLeaderboard();
+    updateHostPanel();
+  });
+
+  window.Net.on('hostChanged', (data) => {
+    if (!game.self || !data) return;
+    if (data.hostId) game.hostId = data.hostId;
+    updateHostPanel();
   });
 
   window.Net.on('ghostMoved', (evt) => {
@@ -540,6 +837,48 @@
       updateHud();
     }
   });
+
+  if (ui.ghostToggle) {
+    ui.ghostToggle.addEventListener('change', () => {
+      if (!game.self || game.hostId !== game.self.id) return;
+      window.Net.sendSetMatchSettings({ ghostsEnabled: ui.ghostToggle.checked });
+    });
+  }
+  if (ui.roundsInput) {
+    ui.roundsInput.addEventListener('change', () => {
+      if (!game.self || game.hostId !== game.self.id) return;
+      const n = parseInt(ui.roundsInput.value, 10);
+      if (!Number.isFinite(n)) return;
+      window.Net.sendSetMatchSettings({ totalRounds: n });
+    });
+  }
+  if (ui.startMatchBtn) {
+    ui.startMatchBtn.addEventListener('click', () => {
+      window.Net.sendStartMatch();
+    });
+  }
+  if (ui.resetMatchBtn) {
+    ui.resetMatchBtn.addEventListener('click', () => {
+      window.Net.sendResetMatch();
+    });
+  }
+
+  if (ui.fxGlowToggle) {
+    ui.fxGlowToggle.addEventListener('change', () => {
+      writeFxBool(LS_FX_GLOW, ui.fxGlowToggle.checked);
+      if (window.Renderer && window.Renderer.setFxOptions) {
+        window.Renderer.setFxOptions({ glow: ui.fxGlowToggle.checked });
+      }
+    });
+  }
+  if (ui.fxTrailToggle) {
+    ui.fxTrailToggle.addEventListener('change', () => {
+      writeFxBool(LS_FX_TRAIL, ui.fxTrailToggle.checked);
+      if (window.Renderer && window.Renderer.setFxOptions) {
+        window.Renderer.setFxOptions({ trail: ui.fxTrailToggle.checked });
+      }
+    });
+  }
 
   const params = new URLSearchParams(window.location.search);
   const urlCode = params.get('code');

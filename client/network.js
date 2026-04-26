@@ -143,6 +143,28 @@
     ws.send(JSON.stringify({ type: 'fire' }));
   }
 
+  function sendSetMatchSettings(payload) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const msg = { type: 'setMatchSettings' };
+    if (payload && typeof payload.ghostsEnabled === 'boolean') {
+      msg.ghostsEnabled = payload.ghostsEnabled;
+    }
+    if (payload && typeof payload.totalRounds === 'number') {
+      msg.totalRounds = payload.totalRounds;
+    }
+    ws.send(JSON.stringify(msg));
+  }
+
+  function sendStartMatch() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'startMatch' }));
+  }
+
+  function sendResetMatch() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'resetMatch' }));
+  }
+
   function beginCreateSession() {
     pendingIntent = 'create';
     suppressReconnect = false;
@@ -206,6 +228,9 @@
     on,
     sendMove,
     sendFire,
+    sendSetMatchSettings,
+    sendStartMatch,
+    sendResetMatch,
     beginCreateSession,
     beginJoinSession,
     leaveSession,
