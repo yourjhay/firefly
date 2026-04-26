@@ -141,6 +141,10 @@ body {
   padding-top: 4px;
 }
 
+.side-panel-backdrop {
+  display: none;
+}
+
 .side-panel-inner {
   width: 100%;
   max-height: min(720px, calc(100dvh - 120px));
@@ -149,6 +153,10 @@ body {
   background: rgba(15, 16, 32, 0.75);
   border: 1px solid var(--pill-border);
   padding: 12px 14px;
+}
+
+.side-panel-mobile-header {
+  display: none;
 }
 
 .leaderboard {
@@ -320,18 +328,55 @@ body {
     padding-bottom: 8px;
   }
 
-  .side-panel {
-    width: 100%;
-    max-width: min(400px, 100%);
-    padding-top: 0;
+  #sidePanelBtn {
+    display: inline-flex !important;
   }
 
-  .side-panel-inner {
-    max-height: 220px;
+  .side-panel {
+    display: none;
+  }
+
+  .side-panel.mobile-open {
+    position: fixed;
+    inset: 0;
+    z-index: 260;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    min-width: 0;
+    padding: 16px;
+  }
+
+  .side-panel.mobile-open .side-panel-inner {
+    width: min(92vw, 420px);
+    max-height: min(78dvh, 640px);
+    border-radius: 14px;
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.45);
+    background: rgba(15, 16, 32, 0.95);
+  }
+
+  .side-panel.mobile-open .side-panel-mobile-header {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 8px;
+  }
+
+  .side-panel-close-btn {
+    color: var(--muted);
   }
 
   #game {
     width: min(92vw, calc(100dvh - 280px));
+  }
+
+  .side-panel-backdrop.mobile-open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 250;
+    background: rgba(8, 9, 18, 0.72);
+    backdrop-filter: blur(5px);
   }
 }
 

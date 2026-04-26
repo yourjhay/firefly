@@ -136,6 +136,7 @@ class GameManager {
     this.totalRounds = 5;
     this.matchRound = 0;
     this.ghostsEnabled = true;
+    this.fogOfWarEnabled = true;
     this.scores = new Map();
     this._ghostTickTimer = setInterval(() => this._tickGhosts(), GHOST_TICK_MS);
     this.newMaze();
@@ -395,6 +396,7 @@ class GameManager {
       this.matchRound = 0;
       this.totalRounds = 5;
       this.ghostsEnabled = true;
+      this.fogOfWarEnabled = true;
       this.scores = new Map();
       this.newMaze();
       this._ghostTickTimer = setInterval(() => this._tickGhosts(), GHOST_TICK_MS);
@@ -424,6 +426,7 @@ class GameManager {
       totalRounds: this.totalRounds,
       matchRound: this.matchRound,
       ghostsEnabled: this.ghostsEnabled,
+      fogOfWarEnabled: this.fogOfWarEnabled,
       scores: this._serializeScores(),
       pointsPerRound: pointsPerRound(this.totalRounds),
       fire: {
@@ -715,9 +718,9 @@ class GameManager {
   }
 
   /**
-   * Host updates ghosts / total rounds in lobby or after match over.
+   * Host updates ghosts / fog / total rounds in lobby or after match over.
    * @param {string} playerId
-   * @param {{ ghostsEnabled?: boolean, totalRounds?: number }} opts
+   * @param {{ ghostsEnabled?: boolean, fogOfWarEnabled?: boolean, totalRounds?: number }} opts
    * @returns {boolean}
    */
   applyMatchSettings(playerId, opts) {
@@ -728,6 +731,9 @@ class GameManager {
     if (!opts || typeof opts !== 'object') return false;
     if (typeof opts.ghostsEnabled === 'boolean') {
       this.ghostsEnabled = opts.ghostsEnabled;
+    }
+    if (typeof opts.fogOfWarEnabled === 'boolean') {
+      this.fogOfWarEnabled = opts.fogOfWarEnabled;
     }
     if (typeof opts.totalRounds === 'number' && Number.isFinite(opts.totalRounds)) {
       const n = Math.floor(opts.totalRounds);

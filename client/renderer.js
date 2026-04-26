@@ -25,6 +25,7 @@
     spectatorSkipFollow: false,
     spectatorPan: { active: false, lastX: 0, lastY: 0, pointerId: null },
     spectatorPanListenersBound: false,
+    fogOfWarEnabled: true,
     playerBarrels: new Map(), // playerId -> barrel entity
     wallEntities: new Map(),  // "x,y" -> wall entity
     wallCrackEntities: new Map(), // "x,y" -> array of crack child entities
@@ -294,6 +295,12 @@
         state.fogTiles.set(`${x},${y}`, fog);
       }
     }
+  }
+
+  function clearFog(opacity) {
+    state.fogTiles.forEach((fog) => {
+      fog.opacity = opacity;
+    });
   }
 
   // Compute the per-tile fog opacity (0 = fully lit, 1 = fully fogged) from the
@@ -715,16 +722,50 @@
 
   function setSpectatorFullVision(enabled) {
     state.spectatorFullVision = !!enabled;
+    if (!state.fogOfWarEnabled) {
+      if (!state.k || !state.fogTiles.size) return;
+      clearFog(0);
+      state.visible.clear();
+      unbindSpectatorMapPan();
+      return;
+    }
     if (enabled) {
       if (!state.k || !state.fogTiles.size) return;
-      state.fogTiles.forEach((fog) => {
-        fog.opacity = 0;
-      });
+      clearFog(0);
       state.visible.clear();
       bindSpectatorMapPan();
     } else {
       unbindSpectatorMapPan();
     }
+  }
+
+  function setFogOfWarEnabled(enabled) {
+    state.fogOfWarEnabled = !!enabled;
+    if (!state.k || !state.fogTiles.size) return;
+
+    if (!state.fogOfWarEnabled) {
+      clearFog(0);
+      state.visible.clear();
+      unbindSpectatorMapPan();
+      return;
+    }
+
+    if (state.spectatorFullVision) {
+      clearFog(0);
+      state.visible.clear();
+      bindSpectatorMapPan();
+      return;
+    }
+
+    unbindSpectatorMapPan();
+    clearFog(1);
+    state.visible.clear();
+    const me = state.playerEntities.get(state.selfId);
+    if (!me) return;
+    const T = state.tileSize || TILE;
+    const gx = Math.floor(me.targetX / T);
+    const gy = Math.floor(me.targetY / T);
+    revealFrom(gx, gy);
   }
 
   /** After fog + pan hooks, snap camera to the local player once then stop auto-follow. */
@@ -872,7 +913,9 @@
       if (id === state.selfId) syncCameraFollow(true);
     }
     // Extend fog reveal whenever the self-player moves.
-    if (id === state.selfId && !state.spectatorFullVision) revealFrom(x, y);
+    if (id === state.selfId && state.fogOfWarEnabled && !state.spectatorFullVision) {
+      revealFrom(x, y);
+    }
   }
 
   function setPlayerFacing(id, facing) {
@@ -1057,9 +1100,8 @@
     } else {
       setSpectatorFullVision(false);
       state.spectatorSkipFollow = false;
-      const me = data.players.find((p) => p.id === state.selfId);
-      if (me) revealFrom(me.x, me.y);
     }
+    setFogOfWarEnabled(data.fogOfWarEnabled !== false);
     syncCameraFollow(true);
   }
 
@@ -1074,6 +1116,7 @@
     removeGhost,
     updateGhostPosition,
     setGhostHp,
+    setFogOfWarEnabled,
     setSpectatorFullVision,
     enterSpectatorView,
     finalizeSpectatorCamera,

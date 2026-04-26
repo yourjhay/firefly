@@ -158,6 +158,7 @@ wss.on('connection', (ws, req) => {
         }
         ws.game.applyMatchSettings(playerId, {
           ghostsEnabled: msg.ghostsEnabled,
+          fogOfWarEnabled: msg.fogOfWarEnabled,
           totalRounds: msg.totalRounds,
         });
         break;

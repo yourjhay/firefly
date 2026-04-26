@@ -149,6 +149,9 @@
     if (payload && typeof payload.ghostsEnabled === 'boolean') {
       msg.ghostsEnabled = payload.ghostsEnabled;
     }
+    if (payload && typeof payload.fogOfWarEnabled === 'boolean') {
+      msg.fogOfWarEnabled = payload.fogOfWarEnabled;
+    }
     if (payload && typeof payload.totalRounds === 'number') {
       msg.totalRounds = payload.totalRounds;
     }
