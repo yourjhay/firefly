@@ -10,12 +10,17 @@
     firePill: document.getElementById('firePill'),
     spectatorPill: document.getElementById('spectatorPill'),
     roomPill: document.getElementById('roomPill'),
+    sidePanel: document.getElementById('sidePanel'),
+    sidePanelBtn: document.getElementById('sidePanelBtn'),
+    sidePanelCloseBtn: document.getElementById('sidePanelCloseBtn'),
+    sidePanelBackdrop: document.getElementById('sidePanelBackdrop'),
     sessionModal: document.getElementById('sessionModal'),
     sessionError: document.getElementById('sessionError'),
     joinCode: document.getElementById('joinCode'),
     leaderboardList: document.getElementById('leaderboardList'),
     hostPanel: document.getElementById('hostPanel'),
     ghostToggle: document.getElementById('ghostToggle'),
+    fogToggle: document.getElementById('fogToggle'),
     roundsInput: document.getElementById('roundsInput'),
     startMatchBtn: document.getElementById('startMatchBtn'),
     resetMatchBtn: document.getElementById('resetMatchBtn'),
@@ -63,8 +68,41 @@
 
   const hostBtn = document.getElementById('hostBtn');
   const joinBtn = document.getElementById('joinBtn');
+  const mobileSidePanelQuery = window.matchMedia('(max-width: 720px)');
+
+  function isMobileSidePanelMode() {
+    return mobileSidePanelQuery.matches;
+  }
+
+  function closeSidePanelModal() {
+    if (ui.sidePanel) ui.sidePanel.classList.remove('mobile-open');
+    if (ui.sidePanelBackdrop) {
+      ui.sidePanelBackdrop.classList.remove('mobile-open');
+      ui.sidePanelBackdrop.classList.add('hidden');
+    }
+    if (ui.sidePanelBtn) ui.sidePanelBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  function openSidePanelModal() {
+    if (!isMobileSidePanelMode()) return;
+    if (!ui.sidePanel) return;
+    ui.sidePanel.classList.add('mobile-open');
+    if (ui.sidePanelBackdrop) {
+      ui.sidePanelBackdrop.classList.remove('hidden');
+      ui.sidePanelBackdrop.classList.add('mobile-open');
+    }
+    if (ui.sidePanelBtn) ui.sidePanelBtn.setAttribute('aria-expanded', 'true');
+  }
+
+  function syncSidePanelUi() {
+    if (!ui.sidePanelBtn) return;
+    const mobile = isMobileSidePanelMode();
+    ui.sidePanelBtn.classList.toggle('hidden', !mobile);
+    if (!mobile) closeSidePanelModal();
+  }
 
   function showSessionModal() {
+    closeSidePanelModal();
     if (ui.sessionModal) ui.sessionModal.classList.remove('hidden');
   }
 
@@ -165,6 +203,7 @@
     totalRounds: 5,
     matchRound: 0,
     ghostsEnabled: true,
+    fogOfWarEnabled: true,
     scores: {},
     pointsPerRound: 20,
   };
@@ -180,6 +219,9 @@
     if (data.totalRounds != null) game.totalRounds = data.totalRounds;
     if (data.matchRound != null) game.matchRound = data.matchRound;
     if (data.ghostsEnabled !== undefined) game.ghostsEnabled = data.ghostsEnabled;
+    if (data.fogOfWarEnabled !== undefined) {
+      game.fogOfWarEnabled = data.fogOfWarEnabled;
+    }
     if (data.scores && typeof data.scores === 'object') {
       game.scores = { ...data.scores };
     }
@@ -260,6 +302,10 @@
     if (ui.ghostToggle) {
       ui.ghostToggle.disabled = !isHost || (!lobby && !over);
       ui.ghostToggle.checked = !!game.ghostsEnabled;
+    }
+    if (ui.fogToggle) {
+      ui.fogToggle.disabled = !isHost || (!lobby && !over);
+      ui.fogToggle.checked = !!game.fogOfWarEnabled;
     }
     if (ui.roundsInput) {
       ui.roundsInput.disabled = !isHost || (!lobby && !over);
@@ -428,6 +474,32 @@
       copyCurrentInviteLink();
     });
   }
+  if (ui.sidePanelBtn) {
+    ui.sidePanelBtn.addEventListener('click', () => {
+      if (ui.sidePanel && ui.sidePanel.classList.contains('mobile-open')) {
+        closeSidePanelModal();
+      } else {
+        openSidePanelModal();
+      }
+    });
+  }
+  if (ui.sidePanelBackdrop) {
+    ui.sidePanelBackdrop.addEventListener('click', () => {
+      closeSidePanelModal();
+    });
+  }
+  if (ui.sidePanelCloseBtn) {
+    ui.sidePanelCloseBtn.addEventListener('click', () => {
+      closeSidePanelModal();
+    });
+  }
+  mobileSidePanelQuery.addEventListener('change', () => {
+    syncSidePanelUi();
+  });
+  document.addEventListener('keydown', (evt) => {
+    if (evt.key === 'Escape') closeSidePanelModal();
+  });
+  syncSidePanelUi();
 
   window.Net.on('status', ({ connected, url, connecting, left }) => {
     if (left) {
@@ -501,6 +573,7 @@
       wallHp: data.wallHp,
       roundId: data.roundId,
       spectatorFullVision: game.selfEliminated,
+      fogOfWarEnabled: game.fogOfWarEnabled,
     });
 
     // Apply any pre-existing fire state (e.g. mid-lockout/depleted reconnect).
@@ -725,6 +798,7 @@
       wallHp: data.wallHp,
       roundId: data.roundId,
       spectatorFullVision: false,
+      fogOfWarEnabled: game.fogOfWarEnabled,
     });
     hideBanner();
     if (game.matchPhase === 'playing') {
@@ -756,6 +830,7 @@
         wallHp: data.wallHp,
         roundId: data.roundId,
         spectatorFullVision: game.selfEliminated,
+        fogOfWarEnabled: game.fogOfWarEnabled,
       });
     }
     updateLeaderboard();
@@ -792,6 +867,7 @@
         wallHp: data.wallHp,
         roundId: data.roundId,
         spectatorFullVision: game.selfEliminated,
+        fogOfWarEnabled: game.fogOfWarEnabled,
       });
     }
     updateLeaderboard();
@@ -842,6 +918,12 @@
     ui.ghostToggle.addEventListener('change', () => {
       if (!game.self || game.hostId !== game.self.id) return;
       window.Net.sendSetMatchSettings({ ghostsEnabled: ui.ghostToggle.checked });
+    });
+  }
+  if (ui.fogToggle) {
+    ui.fogToggle.addEventListener('change', () => {
+      if (!game.self || game.hostId !== game.self.id) return;
+      window.Net.sendSetMatchSettings({ fogOfWarEnabled: ui.fogToggle.checked });
     });
   }
   if (ui.roundsInput) {

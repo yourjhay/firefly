@@ -51,6 +51,15 @@
         <span id="playerInfo" class="pill">You: —</span>
         <span id="spectatorPill" class="pill muted hidden">Spectating</span>
         <span id="playerCount" class="pill muted">Players: 0</span>
+        <button
+          type="button"
+          id="sidePanelBtn"
+          class="pill pill-btn hidden"
+          aria-controls="sidePanel"
+          aria-expanded="false"
+        >
+          Panel
+        </button>
         <button id="serverBtn" class="pill pill-btn" title="Change server URL">
           Server…
         </button>
@@ -64,6 +73,16 @@
       </div>
       <aside id="sidePanel" class="side-panel">
         <div class="side-panel-inner">
+          <div class="side-panel-mobile-header">
+            <button
+              type="button"
+              id="sidePanelCloseBtn"
+              class="pill pill-btn side-panel-close-btn"
+              aria-label="Close panel"
+            >
+              Close
+            </button>
+          </div>
           <div id="leaderboard" class="leaderboard">
             <div class="lb-heading">Leaderboard</div>
             <ul id="leaderboardList" class="lb-list"></ul>
@@ -85,6 +104,10 @@
               <input type="checkbox" id="ghostToggle" checked />
               <span>Ghosts</span>
             </label>
+            <label class="host-row">
+              <input type="checkbox" id="fogToggle" checked />
+              <span>Fog of war</span>
+            </label>
             <label class="host-row host-rounds">
               <span>Rounds</span>
               <input type="number" id="roundsInput" min="1" max="50" value="5" />
@@ -102,6 +125,7 @@
         </div>
       </aside>
     </main>
+    <div id="sidePanelBackdrop" class="side-panel-backdrop hidden"></div>
 
     <div id="touchControls" aria-hidden="true">
       <div class="dpad">
