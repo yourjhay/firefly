@@ -1,4 +1,4 @@
-// Keyboard (WASD/arrows) and on-screen touch dpad. Holding a direction
+// Keyboard (arrow keys) and on-screen touch dpad. Holding a direction
 // repeats the move at a fixed interval so movement feels continuous.
 // Spacebar (or the on-screen fire button) triggers a bullet.
 (function () {
@@ -11,13 +11,9 @@
 
   const KEYMAP = {
     arrowup: 'up',
-    w: 'up',
     arrowdown: 'down',
-    s: 'down',
     arrowleft: 'left',
-    a: 'left',
     arrowright: 'right',
-    d: 'right',
   };
 
   function currentDir() {

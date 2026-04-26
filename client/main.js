@@ -16,6 +16,7 @@
     sidePanelBackdrop: document.getElementById('sidePanelBackdrop'),
     sessionModal: document.getElementById('sessionModal'),
     sessionError: document.getElementById('sessionError'),
+    playerName: document.getElementById('playerName'),
     joinCode: document.getElementById('joinCode'),
     leaderboardList: document.getElementById('leaderboardList'),
     hostPanel: document.getElementById('hostPanel'),
@@ -33,6 +34,9 @@
 
   const LS_FX_GLOW = 'maze.fxGlow';
   const LS_FX_TRAIL = 'maze.fxTrail';
+  const LS_PLAYER_NAME = 'maze.playerName';
+  const PLAYER_NAME_MAX_LEN = 6;
+  const DEFAULT_PLAYER_NAME_LEN = 4;
 
   function readFxBool(key) {
     try {
@@ -48,6 +52,60 @@
     } catch {
       /* ignore */
     }
+  }
+
+  function sanitizePlayerName(raw) {
+    if (typeof raw !== 'string') return null;
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const compact = trimmed.replace(/[^A-Za-z0-9]/g, '').slice(0, PLAYER_NAME_MAX_LEN);
+    return compact || null;
+  }
+
+  function generateDefaultPlayerName() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let out = '';
+    for (let i = 0; i < DEFAULT_PLAYER_NAME_LEN; i++) {
+      out += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return out;
+  }
+
+  function readStoredPlayerName() {
+    try {
+      return sanitizePlayerName(localStorage.getItem(LS_PLAYER_NAME));
+    } catch {
+      return null;
+    }
+  }
+
+  function writeStoredPlayerName(name) {
+    const safe = sanitizePlayerName(name);
+    try {
+      if (safe) localStorage.setItem(LS_PLAYER_NAME, safe);
+      else localStorage.removeItem(LS_PLAYER_NAME);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function ensurePlayerName() {
+    if (!ui.playerName) return null;
+    const existing = sanitizePlayerName(ui.playerName.value);
+    if (existing) {
+      ui.playerName.value = existing;
+      return existing;
+    }
+    const stored = readStoredPlayerName();
+    const next = stored || generateDefaultPlayerName();
+    ui.playerName.value = next;
+    return next;
+  }
+
+  function getPlayerNameForHandshake() {
+    const name = ensurePlayerName();
+    if (name) writeStoredPlayerName(name);
+    return name;
   }
 
   function applyFxFromStorage() {
@@ -445,7 +503,7 @@
   if (hostBtn) {
     hostBtn.addEventListener('click', () => {
       clearSessionError();
-      window.Net.beginCreateSession();
+      window.Net.beginCreateSession(getPlayerNameForHandshake());
     });
   }
 
@@ -457,8 +515,17 @@
         return;
       }
       clearSessionError();
-      window.Net.beginJoinSession(code);
+      window.Net.beginJoinSession(code, getPlayerNameForHandshake());
     });
+  }
+
+  if (ui.playerName) {
+    ui.playerName.addEventListener('input', () => {
+      const next = sanitizePlayerName(ui.playerName.value) || '';
+      ui.playerName.value = next;
+      if (next) writeStoredPlayerName(next);
+    });
+    ensurePlayerName();
   }
 
   if (ui.joinCode) {
@@ -541,6 +608,11 @@
 
   window.Net.on('init', (data) => {
     game.self = data.you;
+    const savedName = sanitizePlayerName(data?.you?.name);
+    if (savedName) {
+      writeStoredPlayerName(savedName);
+      if (ui.playerName) ui.playerName.value = savedName;
+    }
     game.roundId = data.roundId;
     game.state = data.state;
     game.players = new Map(data.players.map((p) => [p.id, p]));
@@ -968,7 +1040,7 @@
     const c = normalizeJoinCode(urlCode);
     ui.joinCode.value = c;
     if (isValidJoinCode(c)) {
-      window.Net.beginJoinSession(c);
+      window.Net.beginJoinSession(c, getPlayerNameForHandshake());
     } else {
       setSessionErrorMsg('Invalid ?code= in link. Use FL1234 (2 letters + 4 digits).');
     }
