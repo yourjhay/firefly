@@ -58,8 +58,49 @@
     </header>
 
     <main id="stage">
-      <div id="game"></div>
-      <div id="banner" class="hidden"></div>
+      <div class="stage-main">
+        <div id="game"></div>
+        <div id="banner" class="hidden"></div>
+      </div>
+      <aside id="sidePanel" class="side-panel">
+        <div class="side-panel-inner">
+          <div id="leaderboard" class="leaderboard">
+            <div class="lb-heading">Leaderboard</div>
+            <ul id="leaderboardList" class="lb-list"></ul>
+          </div>
+          <div id="displayOptions" class="display-options hidden">
+            <div class="display-heading">Display (this device)</div>
+            <label class="display-row">
+              <input type="checkbox" id="fxGlowToggle" />
+              <span>Glow (players & ghosts)</span>
+            </label>
+            <label class="display-row">
+              <input type="checkbox" id="fxTrailToggle" />
+              <span>Movement trail</span>
+            </label>
+          </div>
+          <div id="hostPanel" class="host-panel hidden">
+            <div class="host-heading">Host</div>
+            <label class="host-row">
+              <input type="checkbox" id="ghostToggle" checked />
+              <span>Ghosts</span>
+            </label>
+            <label class="host-row host-rounds">
+              <span>Rounds</span>
+              <input type="number" id="roundsInput" min="1" max="50" value="5" />
+            </label>
+            <button type="button" id="startMatchBtn" class="host-action primary">
+              Start game
+            </button>
+            <button type="button" id="resetMatchBtn" class="host-action hidden">
+              Reset to lobby
+            </button>
+          </div>
+          <p id="lobbyWait" class="lobby-wait hidden" aria-live="polite">
+            Waiting for host to start…
+          </p>
+        </div>
+      </aside>
     </main>
 
     <div id="touchControls" aria-hidden="true">

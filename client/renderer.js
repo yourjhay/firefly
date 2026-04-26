@@ -40,6 +40,11 @@
 
   const FACING_ANGLE = { right: 0, down: 90, left: 180, up: 270 };
 
+  /** Local viewer: player + ghost halos (off by default). */
+  let fxGlow = false;
+  /** Local viewer: player movement trail (off by default). */
+  let fxTrail = false;
+
   // Tuned to land initial visibility near 5% of the maze (see simulation).
   const FOG_VISION_RADIUS = 5; // LOS raycast reach (blocked by walls)
   const FOG_GLOW_RADIUS = 3;   // small halo that always reveals (ignores walls)
@@ -390,6 +395,116 @@
     return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
   }
 
+  function bindHaloToEntity(halo, baseOpacity, ent) {
+    halo.onUpdate(() => {
+      const k = state.k;
+      if (!k) return;
+      const t = k.time() * halo.speed + halo.phase;
+      const s = halo.baseScale + halo.amp * Math.sin(t);
+      halo.scale = k.vec2(s, s);
+      halo.opacity = baseOpacity * (0.75 + 0.35 * (0.5 + 0.5 * Math.sin(t)));
+      halo.pos.x = ent.pos.x;
+      halo.pos.y = ent.pos.y;
+    });
+  }
+
+  function attachPlayerGlowHalos(ent) {
+    const k = state.k;
+    if (!k || !fxGlow || !ent._fxRgb) return;
+    const T = state.tileSize;
+    const [r, g, b] = ent._fxRgb;
+    const glowIntensity = ent._fxIsSelf ? 1.25 : 1.0;
+    const phase = ent._fxPhase;
+    const px = ent.pos.x;
+    const py = ent.pos.y;
+    const outerSpread = 1 + 0.275 * glowIntensity;
+    const innerSpread = 1 + 0.05 * glowIntensity;
+
+    const haloOuter = k.add([
+      k.circle(T / 2),
+      k.pos(px, py),
+      k.anchor('center'),
+      k.color(r, g, b),
+      k.opacity(0.18 * glowIntensity),
+      k.scale(1),
+      k.z(8),
+      'playerGlow',
+      { playerId: ent.playerId, phase, speed: 2.4, baseScale: outerSpread, amp: 0.11 },
+    ]);
+    const haloInner = k.add([
+      k.circle(T / 2),
+      k.pos(px, py),
+      k.anchor('center'),
+      k.color(
+        Math.min(255, r + 40),
+        Math.min(255, g + 40),
+        Math.min(255, b + 40)
+      ),
+      k.opacity(0.35 * glowIntensity),
+      k.scale(1),
+      k.z(9),
+      'playerGlow',
+      {
+        playerId: ent.playerId,
+        phase: phase + Math.PI / 2,
+        speed: 3.2,
+        baseScale: innerSpread,
+        amp: 0.07,
+      },
+    ]);
+    bindHaloToEntity(haloOuter, 0.22 * glowIntensity, ent);
+    bindHaloToEntity(haloInner, 0.4 * glowIntensity, ent);
+  }
+
+  function syncAllVisualFx() {
+    const k = state.k;
+    if (!k) return;
+
+    k.get('playerTrail').forEach((t) => t.destroy());
+    k.get('playerGlow').forEach((g) => g.destroy());
+    if (fxGlow) {
+      state.playerEntities.forEach((ent) => {
+        if (ent._fxRgb) attachPlayerGlowHalos(ent);
+      });
+    }
+
+    k.get('ghostGlow').forEach((e) => e.destroy());
+    state.ghostEntities.forEach((pack) => {
+      pack.halo = null;
+    });
+    if (fxGlow) {
+      const T = state.tileSize;
+      const r = 200;
+      const gb = 210;
+      const bb = 255;
+      state.ghostEntities.forEach((pack, ghostId) => {
+        const ent = pack.ent;
+        if (!ent) return;
+        const halo = k.add([
+          k.circle(T / 2 + 2),
+          k.pos(ent.pos.x, ent.pos.y),
+          k.anchor('center'),
+          k.color(r, gb, bb),
+          k.opacity(0.22),
+          k.z(8.5),
+          'ghostGlow',
+          { ghostId },
+        ]);
+        halo.onUpdate(() => {
+          halo.pos.x = ent.pos.x;
+          halo.pos.y = ent.pos.y;
+        });
+        pack.halo = halo;
+      });
+    }
+  }
+
+  function setFxOptions(opts) {
+    if (opts && typeof opts.glow === 'boolean') fxGlow = opts.glow;
+    if (opts && typeof opts.trail === 'boolean') fxTrail = opts.trail;
+    syncAllVisualFx();
+  }
+
   function addPlayer(p) {
     const k = state.k;
     if (!k) return;
@@ -404,45 +519,8 @@
     const px = p.x * T + T / 2;
     const py = p.y * T + T / 2;
 
-    // Phase offset so multiple players don't pulse in lock-step.
     const phase = Math.random() * Math.PI * 2;
-    // Self-player gets a slightly brighter, bigger halo to help you spot yourself.
     const glowIntensity = isSelf ? 1.25 : 1.0;
-
-    // Halo "spread" beyond the player radius is halved vs. the previous look,
-    // so the aura is tighter and more subtle.
-    const outerSpread = 1 + 0.275 * glowIntensity; // was ~1.55
-    const innerSpread = 1 + 0.05 * glowIntensity;  // was ~1.10
-
-    // Outer halo (soft, low opacity).
-    const haloOuter = k.add([
-      k.circle(T / 2),
-      k.pos(px, py),
-      k.anchor('center'),
-      k.color(r, g, b),
-      k.opacity(0.18 * glowIntensity),
-      k.scale(1),
-      k.z(8),
-      'playerGlow',
-      { playerId: p.id, phase, speed: 2.4, baseScale: outerSpread, amp: 0.11 },
-    ]);
-
-    // Inner halo (tighter, brighter, pulses slightly faster).
-    const haloInner = k.add([
-      k.circle(T / 2),
-      k.pos(px, py),
-      k.anchor('center'),
-      k.color(
-        Math.min(255, r + 40),
-        Math.min(255, g + 40),
-        Math.min(255, b + 40)
-      ),
-      k.opacity(0.35 * glowIntensity),
-      k.scale(1),
-      k.z(9),
-      'playerGlow',
-      { playerId: p.id, phase: phase + Math.PI / 2, speed: 3.2, baseScale: innerSpread, amp: 0.07 },
-    ]);
 
     const ent = k.add([
       k.circle(T / 2 - 4),
@@ -458,8 +536,16 @@
         targetY: py,
         trailT: 0,
         facing: p.facing || 'right',
+        _fxRgb: [r, g, b],
+        _fxIsSelf: isSelf,
+        _fxPhase: phase,
+        _fxGlowIntensity: glowIntensity,
       },
     ]);
+
+    if (fxGlow) {
+      attachPlayerGlowHalos(ent);
+    }
 
     // Facing barrel: a short rectangle that sticks out of the player circle
     // in the direction they'll fire. Anchor 'left' means the base sits at
@@ -488,6 +574,7 @@
     const TRAIL_RADIUS = (T / 2 - 4) * 0.85;
 
     ent.onUpdate(() => {
+      if (!fxTrail) return;
       const dx = ent.targetX - ent.pos.x;
       const dy = ent.targetY - ent.pos.y;
       const moving = Math.abs(dx) > 0.6 || Math.abs(dy) > 0.6;
@@ -496,12 +583,13 @@
       if (ent.trailT < TRAIL_INTERVAL) return;
       ent.trailT = 0;
 
+      const gi = ent._fxGlowIntensity != null ? ent._fxGlowIntensity : 1;
       const trail = k.add([
         k.circle(TRAIL_RADIUS),
         k.pos(ent.pos.x, ent.pos.y),
         k.anchor('center'),
         k.color(r, g, b),
-        k.opacity(0.5 * glowIntensity),
+        k.opacity(0.5 * gi),
         k.scale(1),
         k.z(7),
         'playerTrail',
@@ -510,26 +598,12 @@
       trail.onUpdate(() => {
         trail.age += k.dt();
         const t = Math.min(1, trail.age / trail.life);
-        trail.opacity = 0.5 * glowIntensity * (1 - t);
-        const s = 1 - 0.55 * t; // shrink as it fades
+        trail.opacity = 0.5 * gi * (1 - t);
+        const s = 1 - 0.55 * t;
         trail.scale = k.vec2(s, s);
         if (trail.age >= trail.life) trail.destroy();
       });
     });
-
-    // Keep halos locked to the (lerping) player position and animate pulse.
-    const animateHalo = (halo, baseOpacity) => {
-      halo.onUpdate(() => {
-        const t = k.time() * halo.speed + halo.phase;
-        const s = halo.baseScale + halo.amp * Math.sin(t);
-        halo.scale = k.vec2(s, s);
-        halo.opacity = baseOpacity * (0.75 + 0.35 * (0.5 + 0.5 * Math.sin(t)));
-        halo.pos.x = ent.pos.x;
-        halo.pos.y = ent.pos.y;
-      });
-    };
-    animateHalo(haloOuter, 0.22 * glowIntensity);
-    animateHalo(haloInner, 0.4 * glowIntensity);
 
     // Label (first 4 chars of ID).
     const label = k.add([
@@ -681,16 +755,19 @@
     const gb = 210;
     const bb = 255;
 
-    const halo = k.add([
-      k.circle(T / 2 + 2),
-      k.pos(px, py),
-      k.anchor('center'),
-      k.color(r, gb, bb),
-      k.opacity(0.22),
-      k.z(8.5),
-      'ghostGlow',
-      { ghostId: g.id },
-    ]);
+    let halo = null;
+    if (fxGlow) {
+      halo = k.add([
+        k.circle(T / 2 + 2),
+        k.pos(px, py),
+        k.anchor('center'),
+        k.color(r, gb, bb),
+        k.opacity(0.22),
+        k.z(8.5),
+        'ghostGlow',
+        { ghostId: g.id },
+      ]);
+    }
 
     const ent = k.add([
       k.circle(T / 2 - 2),
@@ -709,10 +786,12 @@
       },
     ]);
 
-    halo.onUpdate(() => {
-      halo.pos.x = ent.pos.x;
-      halo.pos.y = ent.pos.y;
-    });
+    if (halo) {
+      halo.onUpdate(() => {
+        halo.pos.x = ent.pos.x;
+        halo.pos.y = ent.pos.y;
+      });
+    }
 
     const label = k.add([
       k.text(String(g.hp != null ? g.hp : ''), { size: 9, font: 'sans-serif' }),
@@ -988,6 +1067,7 @@
     init,
     teardown,
     renderAll,
+    setFxOptions,
     addPlayer,
     removePlayer,
     addGhost,

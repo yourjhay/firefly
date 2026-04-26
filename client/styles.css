@@ -12,6 +12,10 @@
   box-sizing: border-box;
 }
 
+.hidden {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -81,15 +85,28 @@ body {
   flex: 1;
   position: relative;
   display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  justify-content: center;
+  gap: 12px;
+  padding: 0 10px 10px;
+  min-height: 0;
+}
+
+.stage-main {
+  flex: 1;
+  position: relative;
+  display: flex;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   min-height: 0;
 }
 
 #game {
   position: relative;
   aspect-ratio: 1 / 1;
-  width: min(92vw, calc(100dvh - 220px));
+  width: min(92vw, calc(100dvh - 220px), calc(100vw - 220px));
   max-width: 720px;
   max-height: 720px;
   border-radius: 12px;
@@ -112,6 +129,210 @@ body {
 
 #game.spectator-pan:active {
   cursor: grabbing;
+}
+
+.side-panel {
+  width: 200px;
+  min-width: 180px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 4px;
+}
+
+.side-panel-inner {
+  width: 100%;
+  max-height: min(720px, calc(100dvh - 120px));
+  overflow-y: auto;
+  border-radius: 12px;
+  background: rgba(15, 16, 32, 0.75);
+  border: 1px solid var(--pill-border);
+  padding: 12px 14px;
+}
+
+.leaderboard {
+  margin-bottom: 14px;
+}
+
+.display-options {
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.display-heading {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+
+.display-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.display-row:last-child {
+  margin-bottom: 0;
+}
+
+.display-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.lb-heading,
+.host-heading {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+
+.lb-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.lb-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 14px;
+}
+
+.lb-list li:last-child {
+  border-bottom: none;
+}
+
+.lb-name {
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lb-score {
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.host-panel {
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.host-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.host-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.host-rounds {
+  cursor: default;
+}
+
+.host-rounds input[type="number"] {
+  width: 64px;
+  margin-left: auto;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--pill-border);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+}
+
+.host-action {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--pill-border);
+  background: var(--pill);
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.host-action.primary {
+  background: rgba(247, 201, 72, 0.18);
+  border-color: rgba(247, 201, 72, 0.45);
+  color: var(--accent);
+}
+
+.host-action:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.host-action.primary:hover {
+  background: rgba(247, 201, 72, 0.28);
+}
+
+.lobby-wait {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+#game.lobby-dim {
+  opacity: 0.72;
+}
+
+@media (max-width: 720px) {
+  #stage {
+    flex-direction: column;
+    align-items: center;
+    padding-bottom: 8px;
+  }
+
+  .side-panel {
+    width: 100%;
+    max-width: min(400px, 100%);
+    padding-top: 0;
+  }
+
+  .side-panel-inner {
+    max-height: 220px;
+  }
+
+  #game {
+    width: min(92vw, calc(100dvh - 280px));
+  }
 }
 
 #banner {

@@ -9,7 +9,16 @@ const PLAYER_COLORS = [
 /** Max players in one room (host + guests). */
 const MAX_PLAYERS_PER_ROOM = 13;
 
-const MOVE_COOLDOWN_MS = 70;
+const MATCH_ROUNDS_MIN = 1;
+const MATCH_ROUNDS_MAX = 50;
+
+/** Points awarded to the first player to reach the goal in one match round. */
+function pointsPerRound(totalRounds) {
+  const n = Math.max(1, totalRounds);
+  return Math.round((100 / n) * 100) / 100;
+}
+
+const MOVE_COOLDOWN_MS = 50;
 /** Ghost grid step delay when no player is in line-of-sight (patrol). */
 const GHOST_MOVE_COOLDOWN_PATROL_MS = 400;
 /** Ghost grid step delay when at least one living player is visible (chase). */
@@ -120,6 +129,14 @@ class GameManager {
     this._resetAllEliminated = false;
     this.ghosts = new Map();
     this._ghostIdSeq = 0;
+    /** First createSession player; promoted on disconnect. */
+    this.hostId = null;
+    /** 'lobby' | 'playing' | 'matchOver' */
+    this.matchPhase = 'lobby';
+    this.totalRounds = 5;
+    this.matchRound = 0;
+    this.ghostsEnabled = true;
+    this.scores = new Map();
     this._ghostTickTimer = setInterval(() => this._tickGhosts(), GHOST_TICK_MS);
     this.newMaze();
   }
@@ -231,8 +248,28 @@ class GameManager {
     return id;
   }
 
+  _serializeScores() {
+    const o = {};
+    for (const [id, v] of this.scores) o[id] = v;
+    return o;
+  }
+
+  _buildStandings() {
+    const rows = [];
+    for (const p of this.players.values()) {
+      rows.push({
+        id: p.id,
+        name: p.name,
+        color: p.color,
+        score: this.scores.get(p.id) || 0,
+      });
+    }
+    rows.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    return rows;
+  }
+
   syncGhosts() {
-    const want = this.desiredGhostCount();
+    const want = this.ghostsEnabled ? this.desiredGhostCount() : 0;
     const exclude = new Set();
 
     for (const p of this.players.values()) {
@@ -320,11 +357,12 @@ class GameManager {
       _overheatTimer: null,
     };
     this.players.set(id, player);
+    if (!this.scores.has(id)) this.scores.set(id, 0);
     this.syncGhosts();
     this.broadcast(
       {
         type: 'playerJoined',
-        player: serializePlayer(player),
+        player: { ...serializePlayer(player), score: this.scores.get(id) || 0 },
       },
       id
     );
@@ -333,6 +371,8 @@ class GameManager {
 
   removePlayer(id) {
     if (!this.players.delete(id)) return;
+    this.scores.delete(id);
+    const wasHost = id === this.hostId;
     this.broadcast({ type: 'playerLeft', id });
 
     // No one's left to play — wipe round history so the next player
@@ -350,9 +390,19 @@ class GameManager {
       this.colorIndex = 0;
       this.state = 'playing';
       this.winnerId = null;
+      this.hostId = null;
+      this.matchPhase = 'lobby';
+      this.matchRound = 0;
+      this.totalRounds = 5;
+      this.ghostsEnabled = true;
+      this.scores = new Map();
       this.newMaze();
       this._ghostTickTimer = setInterval(() => this._tickGhosts(), GHOST_TICK_MS);
     } else {
+      if (wasHost) {
+        this.hostId = this.players.keys().next().value;
+        this.broadcast({ type: 'hostChanged', hostId: this.hostId });
+      }
       this.syncGhosts();
     }
   }
@@ -361,10 +411,21 @@ class GameManager {
     return {
       maze: this.maze,
       wallHp: this._serializeWallHp(),
-      players: Array.from(this.players.values()).map(serializePlayer),
+      players: Array.from(this.players.values()).map((p) => {
+        const o = serializePlayer(p);
+        o.score = this.scores.get(p.id) || 0;
+        return o;
+      }),
       state: this.state,
       winnerId: this.winnerId,
       roundId: this.roundId,
+      hostId: this.hostId,
+      matchPhase: this.matchPhase,
+      totalRounds: this.totalRounds,
+      matchRound: this.matchRound,
+      ghostsEnabled: this.ghostsEnabled,
+      scores: this._serializeScores(),
+      pointsPerRound: pointsPerRound(this.totalRounds),
       fire: {
         burstCapacityBaseMs: BURST_CAPACITY_MS_BASE,
         burstCapacityStepMs: BURST_CAPACITY_STEP_MS,
@@ -377,6 +438,7 @@ class GameManager {
   }
 
   move(id, dir) {
+    if (this.matchPhase !== 'playing') return;
     if (this.state !== 'playing') return;
     const p = this.players.get(id);
     if (!p || p.eliminated) return;
@@ -409,11 +471,19 @@ class GameManager {
     if (nx === this.maze.goal.x && ny === this.maze.goal.y) {
       this.state = 'finished';
       this.winnerId = id;
+      if (this.matchPhase === 'playing') {
+        const pts = pointsPerRound(this.totalRounds);
+        this.scores.set(id, (this.scores.get(id) || 0) + pts);
+      }
       this.broadcast({
         type: 'gameOver',
         winnerId: id,
         winner: serializePlayer(p),
         resetInMs: RESET_DELAY_MS,
+        matchRound: this.matchRound,
+        totalRounds: this.totalRounds,
+        isLastMatchRound: this.matchRound >= this.totalRounds,
+        scores: this._serializeScores(),
       });
       if (this._resetTimer) clearTimeout(this._resetTimer);
       this._resetTimer = setTimeout(() => this.reset(), RESET_DELAY_MS);
@@ -421,6 +491,7 @@ class GameManager {
   }
 
   fire(id) {
+    if (this.matchPhase !== 'playing') return;
     if (this.state !== 'playing') return;
     const p = this.players.get(id);
     if (!p || p.eliminated) return;
@@ -571,8 +642,103 @@ class GameManager {
       this.roundId = 0;
       this._resetAllEliminated = false;
     }
+
+    if (this.matchPhase !== 'playing') {
+      return;
+    }
+
+    if (this.matchRound < this.totalRounds) {
+      this.matchRound += 1;
+      this.newMaze();
+      this.broadcast({ type: 'newRound', ...this.snapshot() });
+      return;
+    }
+
+    this.matchPhase = 'matchOver';
+    this.state = 'finished';
+    const standings = this._buildStandings();
+    this.broadcast({
+      type: 'matchOver',
+      ...this.snapshot(),
+      standings,
+    });
+  }
+
+  /**
+   * Host starts the match from lobby. Resets scores and begins match round 1.
+   * @param {string} playerId
+   * @returns {boolean}
+   */
+  startMatch(playerId) {
+    if (playerId !== this.hostId) return false;
+    if (this.matchPhase !== 'lobby') return false;
+    if (this._resetTimer) {
+      clearTimeout(this._resetTimer);
+      this._resetTimer = null;
+    }
+    for (const pid of this.players.keys()) {
+      this.scores.set(pid, 0);
+    }
+    this.matchPhase = 'playing';
+    this.matchRound = 1;
+    this._resetAllEliminated = false;
+    this.roundId = 0;
+    this.winnerId = null;
     this.newMaze();
     this.broadcast({ type: 'newRound', ...this.snapshot() });
+    return true;
+  }
+
+  /**
+   * Host returns everyone to lobby after match over; scores cleared.
+   * @param {string} playerId
+   * @returns {boolean}
+   */
+  resetMatch(playerId) {
+    if (playerId !== this.hostId) return false;
+    if (this.matchPhase !== 'matchOver') return false;
+    if (this._resetTimer) {
+      clearTimeout(this._resetTimer);
+      this._resetTimer = null;
+    }
+    for (const pid of this.players.keys()) {
+      this.scores.set(pid, 0);
+    }
+    this.matchPhase = 'lobby';
+    this.matchRound = 0;
+    this.state = 'playing';
+    this.winnerId = null;
+    this.roundId = 0;
+    this.newMaze();
+    this.broadcast({ type: 'newRound', ...this.snapshot() });
+    return true;
+  }
+
+  /**
+   * Host updates ghosts / total rounds in lobby or after match over.
+   * @param {string} playerId
+   * @param {{ ghostsEnabled?: boolean, totalRounds?: number }} opts
+   * @returns {boolean}
+   */
+  applyMatchSettings(playerId, opts) {
+    if (playerId !== this.hostId) return false;
+    if (this.matchPhase !== 'lobby' && this.matchPhase !== 'matchOver') {
+      return false;
+    }
+    if (!opts || typeof opts !== 'object') return false;
+    if (typeof opts.ghostsEnabled === 'boolean') {
+      this.ghostsEnabled = opts.ghostsEnabled;
+    }
+    if (typeof opts.totalRounds === 'number' && Number.isFinite(opts.totalRounds)) {
+      const n = Math.floor(opts.totalRounds);
+      this.totalRounds = Math.min(
+        MATCH_ROUNDS_MAX,
+        Math.max(MATCH_ROUNDS_MIN, n)
+      );
+    }
+    this.syncGhosts();
+    this.broadcast({ type: 'matchSettings', ...this.snapshot() });
+    return true;
   }
 
   _endOverheat(p) {
@@ -642,12 +808,17 @@ class GameManager {
       winner: null,
       reason: 'allEliminated',
       resetInMs: RESET_DELAY_MS,
+      matchRound: this.matchRound,
+      totalRounds: this.totalRounds,
+      isLastMatchRound: this.matchRound >= this.totalRounds,
+      scores: this._serializeScores(),
     });
     if (this._resetTimer) clearTimeout(this._resetTimer);
     this._resetTimer = setTimeout(() => this.reset(), RESET_DELAY_MS);
   }
 
   _tickGhosts() {
+    if (this.matchPhase !== 'playing' || !this.ghostsEnabled) return;
     if (this.state !== 'playing' || this.ghosts.size === 0) return;
     this._checkGhostPlayerCollision();
     if (this.state !== 'playing') return;
@@ -801,4 +972,9 @@ function serializePlayer(p) {
   };
 }
 
-module.exports = { GameManager, MAX_PLAYERS_PER_ROOM };
+module.exports = {
+  GameManager,
+  MAX_PLAYERS_PER_ROOM,
+  MATCH_ROUNDS_MIN,
+  MATCH_ROUNDS_MAX,
+};
