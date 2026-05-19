@@ -2,6 +2,7 @@
 
 A browser-based multiplayer maze racing game. A new random maze is generated every round; the first player to reach the gold tile wins, and a new round starts automatically.
 
+
 ![Maze Race promo art — fireflies](fireflies_promo.png)
 
 - **Rendering:** [Kaboom.js](https://kaboomjs.com/) (loaded from a CDN)
